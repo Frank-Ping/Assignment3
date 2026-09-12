@@ -243,10 +243,12 @@ class HealthServicesHeartRateSource(
 
                     if (!startRequested) return@withLock
 
-                    // Do not replace an existing workout.
-                    if (info.exerciseTrackedStatus !=
-                        ExerciseTrackedStatus.NO_EXERCISE_IN_PROGRESS
-                    ) {
+                    val resumeOwnedExercise = info.exerciseTrackedStatus ==
+                        ExerciseTrackedStatus.OWNED_EXERCISE_IN_PROGRESS
+
+                    // Reconnect to our workout without replacing another app's session.
+                    if (!resumeOwnedExercise && info.exerciseTrackedStatus !=
+                        ExerciseTrackedStatus.NO_EXERCISE_IN_PROGRESS) {
                         startRequested = false
                         Log.w(TAG, "An exercise is already in progress")
                         updateStatus(SensorStatus.DATA_ERROR)
@@ -257,6 +259,7 @@ class HealthServicesHeartRateSource(
                     val callback = createCallback(registration)
 
                     registeredCallback = callback
+                    ownsExercise = resumeOwnedExercise
                     exerciseClient.setUpdateCallback(
                         mainExecutor,
                         callback
@@ -267,7 +270,16 @@ class HealthServicesHeartRateSource(
                     }
 
                     if (!startRequested) {
-                        clearCallback()
+                        if (ownsExercise) {
+                            endOwnedExercise()
+                        } else {
+                            clearCallback()
+                        }
+                        return@withLock
+                    }
+
+                    if (resumeOwnedExercise) {
+                        Log.d(TAG, "Reconnected to existing exercise")
                         return@withLock
                     }
 

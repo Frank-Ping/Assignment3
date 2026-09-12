@@ -19,7 +19,10 @@ import com.example.wear.presentation.sensors.SensorManagerAccelerometerSource
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.wear.compose.material3.Button
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import java.util.Locale
 import com.example.wear.presentation.data.SensorStatus
 import com.example.wear.presentation.sensors.HeartRateSource
 import com.example.wear.presentation.sensors.HealthServicesHeartRateSource
@@ -34,6 +37,9 @@ class SensorActivity : ComponentActivity() {
 
     private var pageStarted = false
     private var lastHeartRateStatus: SensorStatus? = null
+    private var heartRateText by mutableStateOf("-- bpm")
+    private var accelerationText by mutableStateOf("X: --\nY: --\nZ: --")
+    private var permissionRequested = false
 
     private val heartRatePermissionLauncher =
         registerForActivityResult(
@@ -69,23 +75,16 @@ class SensorActivity : ComponentActivity() {
                         fontSize = 20.sp
                     )
 
-                    Button(
-                        onClick = { requestHeartRateTest() }
-                    ) {
-                        Text(
-                            text = "Start HR test",
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    Button(
-                        onClick = { heartRateSource.stop() }
-                    ) {
-                        Text(
-                            text = "Finish HR test",
-                            fontSize = 12.sp
-                        )
-                    }
+                    Text(
+                        text = "Heart rate: $heartRateText",
+                        color = Color.White,
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        text = "Acceleration (m/s²)\n$accelerationText",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
                 }
             }
         }
@@ -97,7 +96,11 @@ class SensorActivity : ComponentActivity() {
 
         accelerometerSource.start(
             onRecord = { record ->
-                // 每 25 条打印一次，避免高频日志刷屏。
+                accelerationText = String.format(
+                    Locale.US, "X: %.2f\nY: %.2f\nZ: %.2f",
+                    record.x, record.y, record.z
+                )
+                // Log every 25 samples to avoid flooding Logcat.
                 if (record.sequence == 1L || record.sequence % 25L == 0L) {
                     Log.d(
                         "AccelCheck",
@@ -116,6 +119,7 @@ class SensorActivity : ComponentActivity() {
                 }
             }
         )
+        requestHeartRateTest()
     }
 
     override fun onStop() {
@@ -140,7 +144,8 @@ class SensorActivity : ComponentActivity() {
 
         if (granted) {
             startHeartRateTest()
-        } else {
+        } else if (!permissionRequested) {
+            permissionRequested = true
             heartRatePermissionLauncher.launch(permission)
         }
     }
@@ -148,6 +153,7 @@ class SensorActivity : ComponentActivity() {
     private fun startHeartRateTest() {
         heartRateSource.start(
             onRecord = { record ->
+                heartRateText = String.format(Locale.US, "%.0f bpm", record.bpm)
                 Log.d(
                     "HeartRateCheck",
                     "seq=${record.sequence}, " +
