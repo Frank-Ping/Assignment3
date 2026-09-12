@@ -16,16 +16,40 @@ import androidx.wear.compose.material3.Text
 import com.example.wear.presentation.theme.MobileWearableApplicationTheme
 import android.util.Log
 import com.example.wear.presentation.sensors.SensorManagerAccelerometerSource
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.wear.compose.material3.Button
+import com.example.wear.presentation.data.SensorStatus
+import com.example.wear.presentation.sensors.HeartRateSource
+import com.example.wear.presentation.sensors.HealthServicesHeartRateSource
 
 class SensorActivity : ComponentActivity() {
 
-    private lateinit var accelerometerSource:
-            SensorManagerAccelerometerSource
+    private lateinit var accelerometerSource: SensorManagerAccelerometerSource
 
     private var lastLoggedStatus: String? = null
+
+    private lateinit var heartRateSource: HeartRateSource
+
+    private var pageStarted = false
+    private var lastHeartRateStatus: SensorStatus? = null
+
+    private val heartRatePermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted && pageStarted) {
+                startHeartRateTest()
+            } else if (!granted) {
+                logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
+            }
+        }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         accelerometerSource = SensorManagerAccelerometerSource(this)
+
+        heartRateSource = HealthServicesHeartRateSource(this)
 
         setContent {
             MobileWearableApplicationTheme {
@@ -45,11 +69,23 @@ class SensorActivity : ComponentActivity() {
                         fontSize = 20.sp
                     )
 
-                    Text(
-                        text = "Placeholder for sensor data",
-                        color = Color.LightGray,
-                        fontSize = 14.sp
-                    )
+                    Button(
+                        onClick = { requestHeartRateTest() }
+                    ) {
+                        Text(
+                            text = "Start HR test",
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Button(
+                        onClick = { heartRateSource.stop() }
+                    ) {
+                        Text(
+                            text = "Finish HR test",
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             }
         }
@@ -57,6 +93,7 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        pageStarted = true
 
         accelerometerSource.start(
             onRecord = { record ->
@@ -82,8 +119,54 @@ class SensorActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        pageStarted = false
+
         accelerometerSource.stop()
+
+        // Leaving this foreground test interrupts the test session.
+        heartRateSource.stop()
+
         super.onStop()
+    }
+
+    private fun requestHeartRateTest() {
+        val permission =
+            HealthServicesHeartRateSource.requiredPermission()
+
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            permission
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+            startHeartRateTest()
+        } else {
+            heartRatePermissionLauncher.launch(permission)
+        }
+    }
+
+    private fun startHeartRateTest() {
+        heartRateSource.start(
+            onRecord = { record ->
+                Log.d(
+                    "HeartRateCheck",
+                    "seq=${record.sequence}, " +
+                            "bpm=${record.bpm}, " +
+                            "source=${record.source}, " +
+                            "time=${record.timestampNanos}"
+                )
+            },
+            onStatusChanged = { status ->
+                logHeartRateStatus(status)
+            }
+        )
+    }
+
+    private fun logHeartRateStatus(status: SensorStatus) {
+        if (lastHeartRateStatus != status) {
+            Log.d("HeartRateCheck", "status=$status")
+            lastHeartRateStatus = status
+        }
     }
 
 }
