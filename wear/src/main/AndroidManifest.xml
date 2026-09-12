@@ -44,4 +44,11 @@
             android:windowSoftInputMode="adjustResize" />
     </application>
 
+    <uses-permission
+        android:name="android.permission.BODY_SENSORS"
+        android:maxSdkVersion="35" />
+
+    <uses-permission
+        android:name="android.permission.health.READ_HEART_RATE" />
+
 </manifest>

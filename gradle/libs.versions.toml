@@ -18,8 +18,13 @@ composeFoundation = "1.5.6"
 composeUiTooling = "1.5.6"
 wearToolingPreview = "1.0.0"
 coreSplashscreen = "1.2.0"
+healthServices = "1.1.0-rc02"
+coroutines = "1.10.2"
 
 [libraries]
+androidx-health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServices" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-guava = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-guava", version.ref = "coroutines" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
@@ -48,4 +53,3 @@ androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscree
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-
