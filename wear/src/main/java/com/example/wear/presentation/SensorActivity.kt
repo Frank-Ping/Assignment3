@@ -14,11 +14,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.Text
 import com.example.wear.presentation.theme.MobileWearableApplicationTheme
+import android.util.Log
+import com.example.wear.presentation.sensors.SensorManagerAccelerometerSource
 
 class SensorActivity : ComponentActivity() {
 
+    private lateinit var accelerometerSource:
+            SensorManagerAccelerometerSource
+
+    private var lastLoggedStatus: String? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        accelerometerSource = SensorManagerAccelerometerSource(this)
 
         setContent {
             MobileWearableApplicationTheme {
@@ -47,4 +54,36 @@ class SensorActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+
+        accelerometerSource.start(
+            onRecord = { record ->
+                // 每 25 条打印一次，避免高频日志刷屏。
+                if (record.sequence == 1L || record.sequence % 25L == 0L) {
+                    Log.d(
+                        "AccelCheck",
+                        "seq=${record.sequence}, " +
+                                "x=${record.x}, " +
+                                "y=${record.y}, " +
+                                "z=${record.z}, " +
+                                "time=${record.timestampNanos}"
+                    )
+                }
+            },
+            onStatusChanged = { status ->
+                if (lastLoggedStatus != status.name) {
+                    Log.d("AccelCheck", "status=$status")
+                    lastLoggedStatus = status.name
+                }
+            }
+        )
+    }
+
+    override fun onStop() {
+        accelerometerSource.stop()
+        super.onStop()
+    }
+
 }
