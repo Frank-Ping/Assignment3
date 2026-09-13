@@ -2,6 +2,13 @@ package com.example.mobile_wearableapplication.communication
 
 import android.os.SystemClock
 import java.util.TreeMap
+import com.example.mobile_wearableapplication.processing.AccelerationInput
+import com.example.mobile_wearableapplication.processing.HeartRateInput
+import com.example.mobile_wearableapplication.processing.ProcessingSession
+import com.example.mobile_wearableapplication.processing.ProcessingSnapshot
+import com.example.mobile_wearableapplication.processing.SampleSource
+import com.example.mobile_wearableapplication.processing.SensorProcessingEngine
+import com.example.mobile_wearableapplication.processing.ConfirmedPhaseEvent
 
 data class ReceivedSample(
     val sample: WireSample,
@@ -44,6 +51,7 @@ object ReceivedSensorStore {
 
     private val sessions = linkedMapOf<Pair<String, String>, MutableMap<WireDataType, Stream>>()
     private var activeSession: Pair<String, String>? = null
+    private val processor = SensorProcessingEngine()
 
     @Synchronized
     fun accept(nodeId: String, batch: SensorBatch) {
@@ -51,6 +59,9 @@ object ReceivedSensorStore {
         val streams = sessions[key] ?: mutableMapOf<WireDataType, Stream>().also {
             sessions[key] = it
             activeSession = key
+            // Temporary session ownership follows the existing store selection.
+            // Step 3 will select sessions using watch-confirmed session state.
+            processor.startSession(ProcessingSession(nodeId, batch.sessionId))
             if (sessions.size > SESSION_CAPACITY) sessions.remove(sessions.keys.first())
         }
         val stream = streams.getOrPut(batch.dataType) { Stream() }
@@ -62,9 +73,11 @@ object ReceivedSensorStore {
         stream.batches++
         stream.receivedSamples += batch.samples.size
         val now = SystemClock.elapsedRealtime()
+        val newlyAccepted = mutableListOf<WireSample>()
         for (sample in batch.samples) {
             val received = ReceivedSample(sample, batch.source, now)
-            stream.samples.putIfAbsent(sample.timestampNanos, received)
+            if (stream.samples.putIfAbsent(sample.timestampNanos, received) != null) continue
+            newlyAccepted.add(sample)
             val latest = stream.latest
             if (latest == null || sample.timestampNanos > latest.sample.timestampNanos) {
                 stream.latest = received
@@ -75,6 +88,27 @@ object ReceivedSensorStore {
             ACCELERATION_CAPACITY
         } else HEART_RATE_CAPACITY
         while (stream.samples.size > capacity) stream.samples.pollFirstEntry()
+        if (key == activeSession) {
+            val session = ProcessingSession(nodeId, batch.sessionId)
+            val source = SampleSource.valueOf(batch.source.name)
+            when (batch.dataType) {
+                WireDataType.ACCELEROMETER -> processor.acceptAcceleration(session, newlyAccepted.map {
+                    AccelerationInput(it.sequence, it.timestampNanos, source,
+                        checkNotNull(it.x), checkNotNull(it.y), checkNotNull(it.z))
+                })
+                WireDataType.HEART_RATE -> processor.acceptHeartRate(session, newlyAccepted.map {
+                    HeartRateInput(it.sequence, it.timestampNanos, source, checkNotNull(it.bpm))
+                })
+            }
+        }
+    }
+
+    @Synchronized
+    fun processingSnapshot(): ProcessingSnapshot = processor.snapshot()
+
+    @Synchronized
+    fun acceptConfirmedPhase(event: ConfirmedPhaseEvent) {
+        processor.acceptConfirmedPhase(event)
     }
 
     @Synchronized

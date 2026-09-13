@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import com.example.mobile_wearableapplication.communication.ConnectionStatus
 import com.example.mobile_wearableapplication.communication.DeviceRole
 import com.example.mobile_wearableapplication.communication.WearConnectionManager
+import com.example.mobile_wearableapplication.processing.MetricResult
 
 class SensorActivity : ComponentActivity() {
     private var pageStarted = false
@@ -52,6 +53,7 @@ class SensorActivity : ComponentActivity() {
         }
     }
     private var sessionText by mutableStateOf("No session received")
+    private var processingText by mutableStateOf("Processing: no session")
     private lateinit var receiver: SensorDataReceiver
     private var peerNodeId: String? = null
     private var transferText by mutableStateOf("No batch received")
@@ -96,7 +98,8 @@ class SensorActivity : ComponentActivity() {
                     transferText = transferText,
                     accelerationPreview = accelerationPreview,
                     heartRatePreview = heartRatePreview,
-                    sessionText = sessionText
+                    sessionText = sessionText,
+                    processingText = processingText
                 )
             }
         }
@@ -135,6 +138,21 @@ class SensorActivity : ComponentActivity() {
             ?: "No session received"
         accelerationPreview = formatStream(snapshot, WireDataType.ACCELEROMETER)
         heartRatePreview = formatStream(snapshot, WireDataType.HEART_RATE)
+        val processing = ReceivedSensorStore.processingSnapshot()
+        processingText = "Processing input (unique within current store retention)\n" +
+            "Acceleration: ${processing.acceleration.acceptedSamples}\n" +
+            "Heart rate: ${processing.heartRate.acceptedSamples}\n" +
+            "Resting HR: ${metricStatus(processing.restingHeartRate)}\n" +
+            "Exercise HR: ${metricStatus(processing.exerciseHeartRate)}\n" +
+            "Intensity: ${metricStatus(processing.intensity)}\n" +
+            "Recovery: ${metricStatus(processing.recovery)}\n" +
+            "Workout state: ${metricStatus(processing.workoutState)}\n" +
+            "Acceleration RMS: ${metricStatus(processing.accelerationRms)}"
+    }
+
+    private fun metricStatus(result: MetricResult<*>): String = when (result) {
+        is MetricResult.Available -> result.value.toString()
+        is MetricResult.Unavailable -> "— (${result.reason.name.lowercase().replace('_', ' ')})"
     }
 
     private fun formatStream(snapshot: ReceivedSessionSnapshot?, type: WireDataType): String {
@@ -167,7 +185,8 @@ private fun SensorPage(
     transferText: String = "No batch received",
     accelerationPreview: String = "Acceleration: --",
     heartRatePreview: String = "Heart rate: --",
-    sessionText: String = "No session received"
+    sessionText: String = "No session received",
+    processingText: String = "Processing: no session"
 ) {
     Box(
         modifier = Modifier
@@ -210,6 +229,7 @@ private fun SensorPage(
 
             Text(accelerationPreview, color = Color.White, fontSize = 14.sp)
             Text(heartRatePreview, color = Color.White, fontSize = 14.sp)
+            Text(processingText, color = Color.LightGray, fontSize = 12.sp)
             Text(transferText, color = Color.LightGray, fontSize = 12.sp)
             Text(
                 text = "$sessionText\nRolling history in memory; receiving while this page is active.\nRecent/Stale describes receipt time, not measurement accuracy.",
