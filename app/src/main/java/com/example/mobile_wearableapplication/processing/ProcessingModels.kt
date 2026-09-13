@@ -57,6 +57,7 @@ data class ProcessingQuality(
 )
 data class ProcessingSnapshot(
     val session: ProcessingSession? = null,
+    val preprocessing: PreprocessingSnapshot = PreprocessingSnapshot(),
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
     val endedAtNanos: Long? = null,
     val acceleration: InputSummary = InputSummary(),

@@ -74,6 +74,7 @@ object ReceivedSensorStore {
 
     @Synchronized
     fun suspendReception(reason: String) {
+        if (receptionReady) processor.breakContinuity()
         receptionReady = false
         receptionMessage = reason
         activeSession?.let { sessions[it] }?.values?.forEach { it.freshSinceResume = false }

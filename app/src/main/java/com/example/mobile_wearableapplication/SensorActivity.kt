@@ -173,6 +173,12 @@ class SensorActivity : ComponentActivity() {
         accelerationPreview = formatStream(snapshot, WireDataType.ACCELEROMETER)
         heartRatePreview = formatStream(snapshot, WireDataType.HEART_RATE)
         val processing = ReceivedSensorStore.processingSnapshot()
+        val preprocessing = processing.preprocessing
+        fun windowText(window: com.example.mobile_wearableapplication.processing.CoveredWindow?): String {
+            if (window == null) return "— (waiting for data)"
+            val mean = window.mean?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
+            return "$mean; coverage ${String.format(Locale.US, "%.0f%%", window.coverageFraction * 100)}; samples ${window.sampleCount}; smooth support ${String.format(Locale.US, "%.2fs", window.smoothingCoveredSeconds)}"
+        }
         processingText = "Processing input (unique within current store retention)\n" +
             "Acceleration: ${processing.acceleration.acceptedSamples}\n" +
             "Heart rate: ${processing.heartRate.acceptedSamples}\n" +
@@ -181,7 +187,16 @@ class SensorActivity : ComponentActivity() {
             "Intensity: ${metricStatus(processing.intensity)}\n" +
             "Recovery: ${metricStatus(processing.recovery)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
-            "Acceleration RMS: ${metricStatus(processing.accelerationRms)}"
+            "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
+            "Preprocessing (as of watch sample time)\n" +
+            "${if (!reception.ready || reception.sessionLifecycle != SessionLifecycle.RUNNING) "Historical / reception paused\n" else ""}" +
+            "Last valid raw HR (may be historical): ${preprocessing.rawHeartRateBpm ?: "—"}\n" +
+            "HR 3s: ${windowText(preprocessing.heartRate3s)}\n" +
+            "HR 5s: ${windowText(preprocessing.heartRate5s)}\n" +
+            "Acceleration 1s coverage: ${preprocessing.acceleration1s?.let { String.format(Locale.US, "%.0f%%", it.coverageFraction * 100) } ?: "—"}\n" +
+            "HR quality: ${preprocessing.heartRateStats}\n" +
+            "Acceleration quality: ${preprocessing.accelerationStats}\n" +
+            "Hold limits: HR 3s / acceleration 0.2s. Windows do not advance without new watch data."
     }
 
     private fun metricStatus(result: MetricResult<*>): String = when (result) {

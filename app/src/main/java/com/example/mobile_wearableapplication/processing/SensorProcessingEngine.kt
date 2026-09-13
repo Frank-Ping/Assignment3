@@ -1,14 +1,16 @@
 package com.example.mobile_wearableapplication.processing
 
 /** Pure Kotlin. The caller supplies only newly accepted samples, once per sample.
- * This step establishes the pipeline; filtering and metric algorithms come later.
+ * Preprocessing is incremental; physiological metric algorithms are added separately.
  */
 class SensorProcessingEngine {
     private var state = ProcessingSnapshot()
+    private var preprocessor = SensorPreprocessor()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
         if (state.session == session) return
+        preprocessor = SensorPreprocessor()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -21,11 +23,13 @@ class SensorProcessingEngine {
     @Synchronized
     fun reset() {
         state = ProcessingSnapshot()
+        preprocessor = SensorPreprocessor()
     }
 
     @Synchronized
     fun acceptAcceleration(session: ProcessingSession, samples: List<AccelerationInput>) {
         if (session != state.session || samples.isEmpty()) return
+        samples.forEach { preprocessor.accept(it) }
         state = state.copy(acceleration = summarize(
             state.acceleration, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -34,6 +38,7 @@ class SensorProcessingEngine {
     @Synchronized
     fun acceptHeartRate(session: ProcessingSession, samples: List<HeartRateInput>) {
         if (session != state.session || samples.isEmpty()) return
+        samples.forEach { preprocessor.accept(it) }
         state = state.copy(heartRate = summarize(
             state.heartRate, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -66,7 +71,15 @@ class SensorProcessingEngine {
     }
 
     @Synchronized
-    fun snapshot(): ProcessingSnapshot = state
+    fun snapshot(): ProcessingSnapshot {
+        val preprocessing = preprocessor.snapshot()
+        return state.copy(preprocessing = preprocessing, quality = state.quality.copy(
+            heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
+            accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
+    }
+
+    @Synchronized
+    fun breakContinuity() { preprocessor.breakContinuity() }
 
     private fun summarize(previous: InputSummary, timestamps: List<Long>, sources: List<SampleSource>) =
         InputSummary(
