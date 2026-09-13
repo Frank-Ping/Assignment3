@@ -1,7 +1,5 @@
 package com.example.wear.presentation
 
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Image
@@ -215,10 +213,10 @@ class SensorActivity : ComponentActivity() {
         setContent {
             MobileWearableApplicationTheme {
                 BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-                    val cardHeight = (maxHeight * 0.29f).coerceAtLeast(72.dp * LocalDensity.current.fontScale)
+                    val cardHeight = ((maxHeight - 48.dp - 40.dp * LocalDensity.current.fontScale) / 2).coerceAtLeast(48.dp)
                     Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                            .padding(top = (maxHeight * 0.025f).coerceAtLeast(4.dp), bottom = 32.dp),
+                        Modifier.fillMaxSize()
+                            .padding(top = (maxHeight * 0.025f).coerceAtLeast(4.dp), bottom = 30.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
@@ -249,8 +247,6 @@ class SensorActivity : ComponentActivity() {
                                 color = Color.White, fontSize = 18.sp, lineHeight = 22.sp,
                                 fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold
                             )
-                            if (selectedSource == HeartRateSourceType.DEMO)
-                                Text("HR · DEMO", color = Color(0xFFFF8B80), fontSize = 8.sp, lineHeight = 10.sp)
                         }
                         SensorCard("Acceleration · m/s²", R.drawable.ic_acceleration, accelerationStatus,
                             cardHeight, false) {
@@ -271,7 +267,9 @@ class SensorActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        Row(Modifier.fillMaxWidth(0.66f).padding(top = 8.dp, bottom = 3.dp),
+
+                    }
+                        Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.66f).padding(bottom = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center) {
                             if (peerNodeId != null) {
@@ -281,31 +279,6 @@ class SensorActivity : ComponentActivity() {
                             Text(connectionText, color = Color.Gray, fontSize = 9.sp, lineHeight = 11.sp,
                                 textAlign = TextAlign.Center)
                         }
-                        Column(Modifier.fillMaxWidth(0.72f).padding(top = 20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "Source: ${selectedSource.name}${if (collecting) " (locked)" else " · tap to switch"}",
-                                color = Color.LightGray, fontSize = 12.sp, lineHeight = 14.sp, textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().clickable(enabled = !collecting) {
-                                    selectedSource = if (selectedSource == HeartRateSourceType.REAL)
-                                        HeartRateSourceType.DEMO else HeartRateSourceType.REAL
-                                    heartRateText = "-- bpm"
-                                    heartRateStatus = SensorStatus.NOT_STARTED
-                                }.padding(vertical = 14.dp)
-                            )
-                            if (selectedSource == HeartRateSourceType.DEMO) {
-                                Text("Demo: ${demoScenario.label}${if (collecting) " (locked)" else " · tap to change"}",
-                                    color = Color.LightGray, fontSize = 12.sp, lineHeight = 14.sp, textAlign = TextAlign.Center,
-                                    modifier = Modifier.fillMaxWidth().clickable(enabled = !collecting) {
-                                        demoScenario = HeartRateDemoScenario.entries[
-                                            (demoScenario.ordinal + 1) % HeartRateDemoScenario.entries.size]
-                                    }.padding(vertical = 14.dp))
-                            }
-                            // Protocol details stay below the glanceable sensor display.
-                            Text(skippedText, color = Color.Gray, fontSize = 10.sp, lineHeight = 12.sp, textAlign = TextAlign.Center)
-                            Text(transferText, color = Color.Gray, fontSize = 10.sp, lineHeight = 12.sp, textAlign = TextAlign.Center)
-                        }
-                    }
                 }
             }
         }
