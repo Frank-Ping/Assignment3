@@ -1,16 +1,10 @@
 package com.example.wear.presentation
 
-import android.os.SystemClock
-import java.util.UUID
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
-import androidx.wear.compose.material3.Button
-import com.example.wear.presentation.communication.SensorBatch
+import com.example.wear.presentation.communication.SensorBatcher
 import com.example.wear.presentation.communication.SensorDataSender
-import com.example.wear.presentation.communication.WireDataType
-import com.example.wear.presentation.communication.WireSource
-import com.example.wear.presentation.communication.WireSample
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -45,25 +39,10 @@ class SensorActivity : ComponentActivity() {
     private lateinit var sender: SensorDataSender
     private var peerNodeId by mutableStateOf<String?>(null)
     private var transferText by mutableStateOf("Sender stopped")
-    private val testSessionId = UUID.randomUUID().toString()
-    private var testSequence = 0L
-
-    private fun sendTest(type: WireDataType) {
-        val nodeId = peerNodeId ?: return
-        testSequence++
-        val time = SystemClock.elapsedRealtimeNanos()
-        val sample = if (type == WireDataType.ACCELEROMETER) {
-            WireSample(testSequence, time, x = 0.12, y = -0.08, z = 9.79)
-        } else WireSample(testSequence, time, bpm = 72.0)
-        sender.sendBatch(nodeId, SensorBatch(
-            sessionId = testSessionId,
-            batchId = UUID.randomUUID().toString(),
-            dataType = type,
-            source = WireSource.DEMO,
-            samples = listOf(sample)
-        ))
-    }
-
+    private lateinit var batcher: SensorBatcher
+    private var skippedText by mutableStateOf("Samples skipped before sending: 0")
+    private var accelerationStatus by mutableStateOf(SensorStatus.NOT_STARTED)
+    private var heartRateStatus by mutableStateOf(SensorStatus.NOT_STARTED)
 
     private lateinit var accelerometerSource: SensorManagerAccelerometerSource
 
@@ -86,7 +65,7 @@ class SensorActivity : ComponentActivity() {
             ActivityResultContracts.RequestPermission()
         ) { granted ->
             if (granted && pageStarted) {
-                startHeartRateTest()
+                startHeartRateCollection()
             } else if (!granted) {
                 logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
             }
@@ -113,6 +92,7 @@ class SensorActivity : ComponentActivity() {
         }
 
         sender = SensorDataSender(this) { transferText = it }
+        batcher = SensorBatcher({ peerNodeId }, sender) { skippedText = it }
 
         setContent {
             MobileWearableApplicationTheme {
@@ -144,12 +124,9 @@ class SensorActivity : ComponentActivity() {
                         color = Color.White,
                         fontSize = 14.sp
                     )
-                    Button(onClick = { sendTest(WireDataType.ACCELEROMETER) }, enabled = peerNodeId != null) {
-                        Text("Test XYZ")
-                    }
-                    Button(onClick = { sendTest(WireDataType.HEART_RATE) }, enabled = peerNodeId != null) {
-                        Text("Test HR")
-                    }
+                    Text("Acceleration: $accelerationStatus", color = Color.LightGray, fontSize = 12.sp)
+                    Text("Heart rate: $heartRateStatus", color = Color.LightGray, fontSize = 12.sp)
+                    Text(skippedText, color = Color.LightGray, fontSize = 12.sp)
                     Text(transferText, color = Color.LightGray, fontSize = 12.sp)
                     Text(
                         text = connectionText,
@@ -166,9 +143,12 @@ class SensorActivity : ComponentActivity() {
         sender.start()
         connectionManager.start()
         pageStarted = true
+        batcher.start()
 
         accelerometerSource.start(
             onRecord = { record ->
+                if (!pageStarted) return@start
+                batcher.add(record)
                 accelerationText = String.format(
                     Locale.US, "X: %.2f\nY: %.2f\nZ: %.2f",
                     record.x, record.y, record.z
@@ -186,30 +166,32 @@ class SensorActivity : ComponentActivity() {
                 }
             },
             onStatusChanged = { status ->
+                accelerationStatus = status
                 if (lastLoggedStatus != status.name) {
                     Log.d("AccelCheck", "status=$status")
                     lastLoggedStatus = status.name
                 }
             }
         )
-        requestHeartRateTest()
+        requestHeartRateCollection()
     }
 
     override fun onStop() {
         pageStarted = false
+        batcher.stop()
         sender.stop()
         connectionManager.stop()
         peerNodeId = null
 
         accelerometerSource.stop()
 
-        // Leaving this foreground test interrupts the test session.
+        // Collection and transmission are scoped to this foreground page.
         heartRateSource.stop()
 
         super.onStop()
     }
 
-    private fun requestHeartRateTest() {
+    private fun requestHeartRateCollection() {
         val permission =
             HealthServicesHeartRateSource.requiredPermission()
 
@@ -219,16 +201,21 @@ class SensorActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
 
         if (granted) {
-            startHeartRateTest()
+            startHeartRateCollection()
         } else if (!permissionRequested) {
+            logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
             permissionRequested = true
             heartRatePermissionLauncher.launch(permission)
+        } else {
+            logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
         }
     }
 
-    private fun startHeartRateTest() {
+    private fun startHeartRateCollection() {
         heartRateSource.start(
             onRecord = { record ->
+                if (!pageStarted) return@start
+                batcher.add(record)
                 heartRateText = String.format(Locale.US, "%.0f bpm", record.bpm)
                 Log.d(
                     "HeartRateCheck",
@@ -245,6 +232,7 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun logHeartRateStatus(status: SensorStatus) {
+        heartRateStatus = status
         if (lastHeartRateStatus != status) {
             Log.d("HeartRateCheck", "status=$status")
             lastHeartRateStatus = status
