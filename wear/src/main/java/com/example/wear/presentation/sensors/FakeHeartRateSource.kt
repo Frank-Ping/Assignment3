@@ -9,7 +9,7 @@ import com.example.wear.presentation.data.HeartRateSourceType
 import com.example.wear.presentation.data.SensorStatus
 
 enum class HeartRateDemoScenario(val label: String) {
-    NORMAL("Normal"), MISSING("Missing data"),
+    NORMAL("Normal"), AUTO("Automatic timeline"), MISSING("Missing data"),
     BOUNDARY("Boundary 139/141"), NO_RECOVERY("No recovery")
 }
 
@@ -43,7 +43,13 @@ class FakeHeartRateSource(
                 // Bound the index: long demos remain at their plateau without overflow.
                 phaseTick = (phaseTick + 1).coerceAtMost(3600)
                 val noise = doubleArrayOf(0.0, 1.0, 0.0, -1.0)[(phaseTick - 1) % 4]
-                lastBpm = when (current) {
+                // Independent input timeline: never wait for the algorithm to change phase.
+                lastBpm = if (scenario == HeartRateDemoScenario.AUTO) when {
+                    sequence < 35 -> 72.0 + noise
+                    sequence < 65 -> 72.0 + (sequence - 34) * 2.6
+                    sequence < 95 -> 150.0 + noise
+                    else -> (150.0 - (sequence - 94)).coerceAtLeast(72.0)
+                } else when (current) {
                     SessionPhase.RESTING -> 72.0 + noise
                     SessionPhase.EXERCISING -> if (scenario == HeartRateDemoScenario.BOUNDARY) {
                         if (phaseTick % 2 == 1) 139.0 else 141.0

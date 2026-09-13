@@ -6,6 +6,7 @@ class RestingHeartRateCalculator {
     private val motion = mutableListOf<Observation>()
     private val heartRate = mutableListOf<HeartRateInput>()
     private var lastHrSequence = 0L
+    private var lastValid: MetricResult.Available<Double>? = null
     private var frozen: MetricResult<Double>? = null
     private val duration = 30_000_000_000L
 
@@ -32,7 +33,7 @@ class RestingHeartRateCalculator {
 
     fun freeze(start: Long?, end: Long) {
         if (frozen == null) {
-            val value = result(start, end)
+            val value = lastValid ?: result(start, end)
             frozen = if (value is MetricResult.Available) value
                 else MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         }
@@ -69,6 +70,6 @@ class RestingHeartRateCalculator {
         val middle = values.size / 2
         val median = if (values.size % 2 == 0) values[middle - 1] / 2 + values[middle] / 2 else values[middle]
         return MetricResult.Available(median, CalculationEvidence(CalculationWindow(from, end),
-            valid.size.toLong(), coverage, valid.map { it.source }.toSet()))
+            valid.size.toLong(), coverage, valid.map { it.source }.toSet())).also { lastValid = it }
     }
 }

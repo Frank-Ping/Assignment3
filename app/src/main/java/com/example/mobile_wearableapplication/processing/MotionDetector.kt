@@ -39,12 +39,8 @@ class MotionDetector(private val stillThreshold: Double = 0.3, private val motio
         while (points.size > 2 && points[1].time <= start) points.removeAt(0)
         while (points.size > 1500) points.removeAt(0)
         if (points.size < 6 || points.first().time > start) { result = MotionResult(); return }
-        var sum = 0.0
-        for (i in 0 until points.lastIndex) {
-            val seconds = (points[i + 1].time - maxOf(start, points[i].time)).coerceAtLeast(0L) / 1e9
-            sum += points[i].dynamic * points[i].dynamic * seconds
-        }
-        val rms = sqrt(sum) // Full one-second continuous window, time-weighted.
+        val window = points.filter { it.time >= start }
+        val rms = sqrt(window.sumOf { it.dynamic * it.dynamic } / window.size)
         if (!rms.isFinite()) { interrupt(); return }
         val classification = when {
             rms <= stillThreshold -> MotionState.STILL

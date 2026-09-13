@@ -41,9 +41,11 @@ data class ExerciseHeartRate(
 )
 enum class IntensityZone { LOW, MODERATE, HIGH, UNCLASSIFIED, MISSING }
 data class ExerciseIntensity(val percentage: Double?, val zone: IntensityZone, val confirmedAtNanos: Long? = null, val hrMaxBpm: Double = 200.0)
+enum class RecoveryQuality { GOOD, LOW_QUALITY, UNKNOWN }
 data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double, val bpmPerMinute: Double,
     val startEvidence: CalculationEvidence = CalculationEvidence(),
-    val endEvidence: CalculationEvidence = CalculationEvidence())
+    val endEvidence: CalculationEvidence = CalculationEvidence(),
+    val quality: RecoveryQuality = RecoveryQuality.UNKNOWN)
 
 /** Counts describe accepted input, not calculated physiological quality. */
 data class InputSummary(
@@ -60,6 +62,7 @@ data class ProcessingQuality(
 )
 data class ProcessingSnapshot(
     val session: ProcessingSession? = null,
+    val automaticAction: AutomaticWorkoutAction? = null,
     val preprocessing: PreprocessingSnapshot = PreprocessingSnapshot(),
     val motion: MotionResult = MotionResult(),
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),

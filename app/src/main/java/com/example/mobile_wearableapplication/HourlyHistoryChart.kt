@@ -25,7 +25,7 @@ import java.util.Locale
 
 /** Hour buckets are display summaries; Part D's metric calculations stay unchanged. */
 @Composable
-internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offset: Long?, kind: String) {
+internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offset: Long?, kind: String, storedHours: List<StoredHour>? = null) {
     val hourMillis = 3_600_000L
     val currentHour = Calendar.getInstance().apply {
         timeInMillis = now
@@ -36,11 +36,22 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
     val stacked = kind == "Intensity"
     val points = if (kind == "HR") processing.chartOutput.heartRate else processing.chartOutput.rms
     // Refresh aggregation only for a new snapshot/time tick, not unrelated UI changes.
-    val (sums, counts, zones) = remember(processing.chartOutput, offset, start, now / 1_000, kind) {
+    val (sums, counts, zones) = remember(processing.chartOutput, offset, start, now / 1_000, kind, storedHours) {
         val sums = DoubleArray(12)
         val counts = IntArray(12)
         val zones = Array(12) { DoubleArray(5) }
-    if (offset != null) {
+    if (storedHours != null) {
+        storedHours.forEach { row ->
+            if (row.time in start..now) {
+                val index = ((row.time - start) / hourMillis).toInt()
+                if (index in 0..11) {
+                    sums[index] += row.sum
+                    counts[index] += row.count.toInt()
+                    row.zones.forEachIndexed { zone, seconds -> zones[index][zone] += seconds / 60.0 }
+                }
+            }
+        }
+    } else if (offset != null) {
         if (stacked) {
             processing.chartOutput.zoneIntervals.forEach { interval ->
                 val from = interval.startNanos / 1_000_000L + offset

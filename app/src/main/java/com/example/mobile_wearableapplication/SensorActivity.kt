@@ -73,6 +73,8 @@ class SensorActivity : ComponentActivity() {
         }
     }
     private var overview by mutableStateOf<Map<String, String>>(emptyMap())
+    private var storedHistory by mutableStateOf(StoredHistory())
+    private var lastHistoryWriteRequest = 0L
     private var chartNowMillis by mutableStateOf(System.currentTimeMillis())
     private var historyPreview by mutableStateOf<HistoryPreview?>(null)
     private var chartEpochOffsetMillis by mutableStateOf<Long?>(null)
@@ -94,6 +96,7 @@ class SensorActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        HistoryFileStore.open(this)
         enableEdgeToEdge()
 
         sessionClient = PhoneSessionClient(this, { node, state ->
@@ -137,6 +140,7 @@ class SensorActivity : ComponentActivity() {
                     onBack = { finish() },
                     connectionText = connectionText,
                     overview = overview,
+                    storedHistory = storedHistory,
                     chartProcessing = historyPreview?.processing ?: chartProcessing,
                     chartNowMillis = chartNowMillis,
                     chartEpochOffsetMillis = historyPreview?.epochOffsetMillis ?: chartEpochOffsetMillis,
@@ -187,6 +191,7 @@ class SensorActivity : ComponentActivity() {
         connectionManager.stop()
         peerNodeId = null
         refreshDiagnostics()
+        HistoryFileStore.update(chartProcessing, chartEpochOffsetMillis, force = true)
     }
     private fun refreshDiagnostics() {
         transferText = pendingTransferText
@@ -208,6 +213,7 @@ class SensorActivity : ComponentActivity() {
         chartNowMillis = System.currentTimeMillis()
         historyPreview = HistoryPreviewStore.value
         if (chartSession != processing.session) {
+            HistoryFileStore.update(chartProcessing, chartEpochOffsetMillis, force = true)
             chartSession = processing.session
             chartEpochOffsetMillis = null
         }
@@ -219,7 +225,15 @@ class SensorActivity : ComponentActivity() {
                     (SystemClock.elapsedRealtime() - received.receivedAtMillis) - received.sample.timestampNanos / 1_000_000L
             }
         }
+        if (reception.ready) processing.automaticAction?.let {
+            sessionClient.command(SessionAction.valueOf(it.name))
+        }
         chartProcessing = processing
+        if (chartNowMillis - lastHistoryWriteRequest >= 1_000L) {
+            lastHistoryWriteRequest = chartNowMillis
+            HistoryFileStore.update(processing, chartEpochOffsetMillis)
+        }
+        storedHistory = HistoryFileStore.snapshot
         val preprocessing = processing.preprocessing
         val exercise = (processing.exerciseHeartRate as? MetricResult.Available)?.value
         val intensity = (processing.intensity as? MetricResult.Available)?.value
@@ -255,8 +269,11 @@ class SensorActivity : ComponentActivity() {
                 is MetricResult.Available -> if (exercising) "Average: time weighted · Peak: smoothed"
                     else "Retained exercise statistics · Peak: smoothed"
             },
-            "intensityZone" to (intensity?.zone?.name ?: ""),
-            "baseline" to when (val result = processing.restingHeartRate) {
+            "intensityZone" to (if (exercising) intensity?.zone?.name.orEmpty() else ""),
+            "savedTime" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
+                java.text.SimpleDateFormat("MM/dd HH:mm", Locale.US).format(java.util.Date(storedHistory.summary!!.ended)) else "",
+            "baseline" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
+                (storedHistory.summary!!.baseline?.let { bpm(it) } ?: "— unavailable") else when (val result = historyPreview?.processing?.restingHeartRate ?: processing.restingHeartRate) {
                 is MetricResult.Available -> bpm(result.value)
                 is MetricResult.Unavailable -> metricStatus(result)
             },
@@ -267,10 +284,14 @@ class SensorActivity : ComponentActivity() {
                 processing.restingHeartRate is MetricResult.Available -> "Valid resting baseline"
                 else -> "Requires 30 seconds of stillness and sufficient HR data"
             },
-            "recovery" to when (val result = historyPreview?.processing?.recovery ?: processing.recovery) {
-                is MetricResult.Available -> String.format(Locale.US, "%.1f bpm/min", result.value.bpmPerMinute)
+            "recovery" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
+                (storedHistory.summary!!.recovery?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "— unavailable") else when (val result = historyPreview?.processing?.recovery ?: processing.recovery) {
+                is MetricResult.Available -> String.format(Locale.US, "%.1f bpm", result.value.declineBpm)
                 is MetricResult.Unavailable -> metricStatus(result)
             },
+            "recoveryQualityLabel" to if (processing.session == null && historyPreview == null)
+                storedHistory.summary?.recoveryQuality.orEmpty() else
+                ((historyPreview?.processing?.recovery ?: processing.recovery) as? MetricResult.Available)?.value?.quality?.name.orEmpty(),
             "details" to recoveryText(processing.recovery, processing.recoveryRemainingSeconds),
             "historyStatus" to when {
                 processing.session == null -> "No session data"
@@ -369,8 +390,8 @@ class SensorActivity : ComponentActivity() {
                 (if (remaining != null && remaining > 0) " ($remaining s remaining; watch sample time)" else "")
             is MetricResult.Available -> {
                 val r = result.value
-                "\nH0: %.1f bpm; H60: %.1f bpm\nDrop: %.1f bpm\nRate: %.1f bpm/min (1-minute average decline)".format(
-                    r.startBpm, r.endBpm, r.declineBpm, r.bpmPerMinute) +
+                "\nH0: %.1f bpm; H60: %.1f bpm\nRecovery: %.1f bpm (1-minute decline)".format(
+                    r.startBpm, r.endBpm, r.declineBpm) +
                     (if (r.declineBpm <= 0) "\nHeart rate has not declined" else "") +
                     "\nH0 window [−5s, 0s): ${evidenceText(r.startEvidence)}" +
                     "\nH60 window [+55s, +60s): ${evidenceText(r.endEvidence)}"
@@ -422,6 +443,7 @@ private fun SensorPage(
     onBack: () -> Unit,
     connectionText: String = "Connection stopped",
     overview: Map<String, String> = emptyMap(),
+    storedHistory: StoredHistory = StoredHistory(),
     chartProcessing: ProcessingSnapshot = ProcessingSnapshot(),
     chartNowMillis: Long = System.currentTimeMillis(),
     chartEpochOffsetMillis: Long? = null,
@@ -485,7 +507,15 @@ private fun SensorPage(
                     Triple("Heart Rate\nRecovery", "recovery", R.drawable.ic_recovery)).forEach { (title, key, icon) ->
                     Surface(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(14.dp), color = Color(0xFF252323)) {
                         Column(Modifier.padding(10.dp * scale), verticalArrangement = Arrangement.spacedBy(4.dp * scale)) {
-                            Text(time, color = Color.LightGray, fontSize = (10 * scale).sp)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(overview["savedTime"].orEmpty().ifEmpty { time }, color = Color.LightGray, fontSize = (10 * scale).sp)
+                                if (key == "recovery") Text(when (overview["recoveryQualityLabel"]) {
+                                    "GOOD" -> "Good Quality"
+                                    "LOW_QUALITY" -> "Low Quality"
+                                    "UNKNOWN" -> "Quality Unknown"
+                                    else -> ""
+                                }, color = Color.LightGray, fontSize = (8 * scale).sp)
+                            }
                             Row(Modifier.fillMaxWidth().height(34.dp * scale),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp * scale)) {
@@ -519,9 +549,11 @@ private fun SensorPage(
                             }
                         }
                     }
+                    if (storedHistory.error != null) Text(storedHistory.error ?: "", color = coral, fontSize = 9.sp)
                     Box(Modifier.fillMaxWidth().weight(1f)) {
-                        if (intensityTab) IntensityChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
-                        else HeartRateChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
+                        HourlyHistoryChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis,
+                            if (intensityTab) "Intensity" else "HR",
+                            if (showingHistoryPreview) null else storedHistory.hours)
                     }
                 }
             }

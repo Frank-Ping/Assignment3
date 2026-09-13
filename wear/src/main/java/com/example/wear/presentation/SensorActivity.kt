@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.Text
 import com.example.wear.presentation.theme.MobileWearableApplicationTheme
 import android.util.Log
+import com.example.wear.presentation.sensors.AccelerometerSource
+import com.example.wear.presentation.sensors.FakeAccelerometerSource
 import com.example.wear.presentation.sensors.SensorManagerAccelerometerSource
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
@@ -147,7 +149,7 @@ class SensorActivity : ComponentActivity() {
     private var accelerationStatus by mutableStateOf(SensorStatus.NOT_STARTED)
     private var heartRateStatus by mutableStateOf(SensorStatus.NOT_STARTED)
 
-    private lateinit var accelerometerSource: SensorManagerAccelerometerSource
+    private lateinit var accelerometerSource: AccelerometerSource
 
     private var lastLoggedStatus: String? = null
 
@@ -294,7 +296,7 @@ class SensorActivity : ComponentActivity() {
         DemoControl.configure = { name ->
             val scenario = HeartRateDemoScenario.entries.firstOrNull { it.name == name }
             if (collecting) "Finish session before changing scenario"
-            else if (scenario == null) "Use NORMAL, MISSING, BOUNDARY or NO_RECOVERY"
+            else if (scenario == null) "Use NORMAL, AUTO, MISSING, BOUNDARY or NO_RECOVERY"
             else {
                 selectedSource = HeartRateSourceType.DEMO
                 demoScenario = scenario
@@ -330,7 +332,10 @@ class SensorActivity : ComponentActivity() {
         lastHeartRateAt = null
         heartRateText = "-- bpm"
         accelerationText = "X: --\nY: --\nZ: --"
-        batcher.start(checkNotNull(sessionController.state.sessionId))
+        val fakeAcceleration = selectedSource == HeartRateSourceType.DEMO && demoScenario == HeartRateDemoScenario.AUTO
+        accelerometerSource = if (fakeAcceleration) FakeAccelerometerSource() else SensorManagerAccelerometerSource(this)
+        batcher.start(checkNotNull(sessionController.state.sessionId),
+            if (fakeAcceleration) WireSource.DEMO else WireSource.REAL)
 
         accelerometerSource.start(
             onRecord = { record ->

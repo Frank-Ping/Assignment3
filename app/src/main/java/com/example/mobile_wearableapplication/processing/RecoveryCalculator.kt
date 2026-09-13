@@ -69,11 +69,16 @@ class RecoveryCalculator {
         if (t0 == null) return MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
         recoveryStart = t0
         val end = t0 + 60_000_000_000L
-        if (moved(t0) == true) return MetricResult.Unavailable(UnavailableReason.INTERRUPTED_BY_MOVEMENT)
         if (ended != null && ended < end) return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
-        finalResult?.let { return it }
+        val quality = when (moved(t0, minOf(now ?: t0, end))) {
+            true -> RecoveryQuality.LOW_QUALITY
+            false -> RecoveryQuality.GOOD
+            null -> RecoveryQuality.UNKNOWN
+        }
+        finalResult?.let { result ->
+            return if (result is MetricResult.Available) result.copy(value = result.value.copy(quality = quality)) else result
+        }
         if ((now ?: t0) < end) return MetricResult.Unavailable(UnavailableReason.COLLECTING_RECOVERY)
-        if (moved(t0) == null) return MetricResult.Unavailable(UnavailableReason.RECOVERY_MOTION_UNKNOWN)
         if (exerciseStart == null || exerciseStart > t0 - 5_000_000_000L)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val (h0, first) = endpoint(t0 - 5_000_000_000L, t0)
@@ -81,7 +86,7 @@ class RecoveryCalculator {
         if (h0 == null || h60 == null || first.coverageFraction!! < 0.8 || last.coverageFraction!! < 0.8)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val drop = h0 - h60
-        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, drop, first, last),
+        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, drop, first, last, quality),
             CalculationEvidence(CalculationWindow(t0-5_000_000_000L,end), first.sampleCount+last.sampleCount,
                 sources = first.sources+last.sources))
         finalResult = result

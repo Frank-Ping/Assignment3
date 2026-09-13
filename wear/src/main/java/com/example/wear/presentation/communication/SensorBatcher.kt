@@ -15,6 +15,7 @@ class SensorBatcher(
     private val handler = Handler(Looper.getMainLooper())
     private val acceleration = mutableListOf<WireSample>()
     private var sessionId = ""
+    private var accelerationSource = WireSource.REAL
     private var running = false
     private var discarded = 0L
     private val tick = object : Runnable {
@@ -25,12 +26,13 @@ class SensorBatcher(
         }
     }
 
-    fun start(confirmedSessionId: String) {
+    fun start(confirmedSessionId: String, accelerationSource: WireSource = WireSource.REAL) {
         if (running) return
 
         handler.removeCallbacksAndMessages(null)
         acceleration.clear()
         sessionId = confirmedSessionId
+        this.accelerationSource = accelerationSource
         discarded = 0L
         running = true
         report("Samples skipped before sending: 0")
@@ -54,7 +56,7 @@ class SensorBatcher(
         if (acceleration.isEmpty()) return
         val samples = acceleration.toList()
         acceleration.clear()
-        transmit(WireDataType.ACCELEROMETER, WireSource.REAL, samples)
+        transmit(WireDataType.ACCELEROMETER, accelerationSource, samples)
     }
 
     private fun transmit(type: WireDataType, source: WireSource, samples: List<WireSample>) {

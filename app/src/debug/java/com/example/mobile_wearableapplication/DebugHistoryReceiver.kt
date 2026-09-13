@@ -101,6 +101,6 @@ class DebugHistoryReceiver : BroadcastReceiver() {
                     CalculationEvidence(sources = setOf(SampleSource.DEMO)))),
             start
         )
-        resultData = "Loaded demo history and recovery summary (30 bpm/min); current HR unchanged"
+        resultData = "Loaded demo history and recovery summary (30 bpm); current HR unchanged"
     }
 }
