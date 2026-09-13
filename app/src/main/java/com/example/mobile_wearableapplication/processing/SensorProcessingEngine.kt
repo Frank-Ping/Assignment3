@@ -7,12 +7,16 @@ class SensorProcessingEngine {
     private var state = ProcessingSnapshot()
     private var preprocessor = SensorPreprocessor()
     private var motionDetector = MotionDetector()
+    private var restingCalculator = RestingHeartRateCalculator()
+    private var exerciseCalculator = ExerciseHeartRateCalculator()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
         if (state.session == session) return
         preprocessor = SensorPreprocessor()
         motionDetector = MotionDetector()
+        restingCalculator = RestingHeartRateCalculator()
+        exerciseCalculator = ExerciseHeartRateCalculator()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -27,13 +31,18 @@ class SensorProcessingEngine {
         state = ProcessingSnapshot()
         preprocessor = SensorPreprocessor()
         motionDetector = MotionDetector()
+        restingCalculator = RestingHeartRateCalculator()
+        exerciseCalculator = ExerciseHeartRateCalculator()
     }
 
     @Synchronized
     fun acceptAcceleration(session: ProcessingSession, samples: List<AccelerationInput>) {
         if (session != state.session || samples.isEmpty()) return
         samples.forEach { preprocessor.accept(it) }
-        samples.forEach { motionDetector.accept(it) }
+        samples.forEach {
+            motionDetector.accept(it)
+            restingCalculator.observe(it.timestampNanos, motionDetector.snapshot(it.timestampNanos).stillnessVerified == true)
+        }
         state = state.copy(acceleration = summarize(
             state.acceleration, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -43,6 +52,7 @@ class SensorProcessingEngine {
     fun acceptHeartRate(session: ProcessingSession, samples: List<HeartRateInput>) {
         if (session != state.session || samples.isEmpty()) return
         samples.forEach { preprocessor.accept(it) }
+        samples.forEach { restingCalculator.accept(it); exerciseCalculator.accept(it) }
         state = state.copy(heartRate = summarize(
             state.heartRate, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -66,6 +76,8 @@ class SensorProcessingEngine {
             WorkoutPhase.RECOVERING -> return
         }
         if (event.phase != expectedPhase) return
+        if (event.phase == WorkoutPhase.EXERCISING)
+            restingCalculator.freeze(state.restingStartedAt, event.watchElapsedTimeNanos)
         state = state.copy(workoutState = MetricResult.Available(event, CalculationEvidence()),
             phaseHistory = state.phaseHistory + event)
     }
@@ -73,6 +85,7 @@ class SensorProcessingEngine {
     @Synchronized
     fun endSession(session: ProcessingSession, watchElapsedTimeNanos: Long) {
         if (session == state.session) {
+            restingCalculator.freeze(state.restingStartedAt, watchElapsedTimeNanos)
             state = state.copy(endedAtNanos = watchElapsedTimeNanos)
             motionDetector.interrupt()
         }
@@ -89,17 +102,18 @@ class SensorProcessingEngine {
     fun snapshot(): ProcessingSnapshot {
         val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
         val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot(preprocessing.asOfWatchNanos)
-        return state.copy(preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
+        return state.copy(exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
+            state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), restingHeartRate = restingCalculator.result(state.restingStartedAt), preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
             stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
             heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
             accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
     }
 
     @Synchronized
-    fun breakContinuity() { preprocessor.breakContinuity(); motionDetector.interrupt() }
+    fun breakContinuity() { preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt() }
 
     @Synchronized
-    fun markAccelerationUnavailable() { motionDetector.interrupt() }
+    fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt() }
 
     private fun summarize(previous: InputSummary, timestamps: List<Long>, sources: List<SampleSource>) =
         InputSummary(

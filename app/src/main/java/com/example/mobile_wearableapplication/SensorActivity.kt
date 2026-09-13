@@ -182,8 +182,8 @@ class SensorActivity : ComponentActivity() {
         processingText = "Processing input (unique within current store retention)\n" +
             "Acceleration: ${processing.acceleration.acceptedSamples}\n" +
             "Heart rate: ${processing.heartRate.acceptedSamples}\n" +
-            "Resting HR: ${metricStatus(processing.restingHeartRate)}\n" +
-            "Exercise HR: ${metricStatus(processing.exerciseHeartRate)}\n" +
+            "Session resting baseline: ${metricStatus(processing.restingHeartRate)}\n" +
+            "Exercise HR: ${exerciseHeartRateText(processing.exerciseHeartRate)}\n" +
             "Intensity: ${metricStatus(processing.intensity)}\n" +
             "Recovery: ${metricStatus(processing.recovery)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
@@ -200,6 +200,15 @@ class SensorActivity : ComponentActivity() {
             "Acceleration quality: ${preprocessing.accelerationStats}\n" +
             "Hold limits: HR 3s / acceleration 0.2s. Windows do not advance without new watch data."
     }
+
+    private fun exerciseHeartRateText(result: com.example.mobile_wearableapplication.processing.MetricResult<com.example.mobile_wearableapplication.processing.ExerciseHeartRate>): String =
+        when (result) {
+            is MetricResult.Unavailable -> metricStatus(result)
+            is MetricResult.Available -> {
+                fun bpm(value: Double?) = value?.let { "%.1f bpm".format(it) } ?: "—"
+                "\nCurrent (3s): ${bpm(result.value.currentBpm)}\nAverage: ${bpm(result.value.timeWeightedAverageBpm)}\nPeak (smoothed): ${bpm(result.value.smoothedPeakBpm)}"
+            }
+        }
 
     private fun metricStatus(result: MetricResult<*>): String = when (result) {
         is MetricResult.Available -> result.value.toString()
