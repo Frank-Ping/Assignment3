@@ -2,6 +2,7 @@ package com.example.wear.presentation
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import com.example.wear.presentation.communication.SensorBatcher
 import com.example.wear.presentation.communication.SensorDataSender
@@ -35,6 +36,9 @@ import java.util.Locale
 import com.example.wear.presentation.data.SensorStatus
 import com.example.wear.presentation.sensors.HeartRateSource
 import com.example.wear.presentation.sensors.HealthServicesHeartRateSource
+import com.example.wear.presentation.sensors.FakeHeartRateSource
+import com.example.wear.presentation.sensors.HeartRateDemoScenario
+import com.example.wear.presentation.data.HeartRateSourceType
 import com.example.wear.presentation.communication.ConnectionStatus
 import com.example.wear.presentation.communication.DeviceRole
 import com.example.wear.presentation.communication.WearConnectionManager
@@ -115,6 +119,8 @@ class SensorActivity : ComponentActivity() {
     private var lastLoggedStatus: String? = null
 
     private lateinit var heartRateSource: HeartRateSource
+    private var selectedSource by mutableStateOf(HeartRateSourceType.REAL)
+    private var demoScenario by mutableStateOf(HeartRateDemoScenario.NORMAL)
 
     private lateinit var connectionManager: WearConnectionManager
 
@@ -192,7 +198,7 @@ class SensorActivity : ComponentActivity() {
                     )
 
                     Text(
-                        text = "Heart rate: $heartRateText",
+                        text = "Heart rate · ${selectedSource.name}: $heartRateText",
                         color = Color.White,
                         fontSize = 16.sp
                     )
@@ -205,6 +211,25 @@ class SensorActivity : ComponentActivity() {
                     Text(sessionMessage, color = Color.LightGray, fontSize = 12.sp)
                     Text("Acceleration: $accelerationStatus", color = Color.LightGray, fontSize = 12.sp)
                     Text("Heart rate: $heartRateStatus", color = Color.LightGray, fontSize = 12.sp)
+                    Text(
+                        "Source: ${selectedSource.name}${if (collecting) " (locked)" else " — tap to switch"}",
+                        color = Color.LightGray, fontSize = 12.sp,
+                        modifier = Modifier.clickable(enabled = !collecting) {
+                            if (!collecting) {
+                                selectedSource = if (selectedSource == HeartRateSourceType.REAL) HeartRateSourceType.DEMO else HeartRateSourceType.REAL
+                                heartRateText = "-- bpm"
+                                heartRateStatus = SensorStatus.NOT_STARTED
+                            }
+                        }
+                    )
+                    if (selectedSource == HeartRateSourceType.DEMO) {
+                        Text("Demo: ${demoScenario.label}${if (collecting) " (locked)" else " — tap to change"}",
+                            color = Color.LightGray, fontSize = 12.sp,
+                            modifier = Modifier.clickable(enabled = !collecting) {
+                                if (!collecting) demoScenario = HeartRateDemoScenario.entries[
+                                    (demoScenario.ordinal + 1) % HeartRateDemoScenario.entries.size]
+                            })
+                    }
                     Text(skippedText, color = Color.LightGray, fontSize = 12.sp)
                     Text(transferText, color = Color.LightGray, fontSize = 12.sp)
                     Text(
@@ -244,6 +269,9 @@ class SensorActivity : ComponentActivity() {
         if (!pageStarted || collecting || activePageOwner !== pageOwner) return
         collecting = true
         val token = ++collectionGeneration
+        heartRateSource = if (selectedSource == HeartRateSourceType.DEMO) {
+            FakeHeartRateSource({ sessionController.state.phase }, demoScenario)
+        } else HealthServicesHeartRateSource.forPage(this)
         lastAccelerationAt = null
         lastHeartRateAt = null
         heartRateText = "-- bpm"
@@ -329,6 +357,10 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun requestHeartRateCollection() {
+        if (selectedSource == HeartRateSourceType.DEMO) {
+            startHeartRateCollection()
+            return
+        }
         val permission =
             HealthServicesHeartRateSource.requiredPermission()
 
@@ -370,7 +402,10 @@ class SensorActivity : ComponentActivity() {
                 )
             },
             onStatusChanged = { status ->
-                if (token == collectionGeneration && collecting && activePageOwner === pageOwner) logHeartRateStatus(status)
+                if (token == collectionGeneration && collecting && activePageOwner === pageOwner) {
+                    logHeartRateStatus(status)
+                    if (status == SensorStatus.WAITING_FOR_DATA) heartRateText = "-- bpm (waiting)"
+                }
             }
         )
     }
