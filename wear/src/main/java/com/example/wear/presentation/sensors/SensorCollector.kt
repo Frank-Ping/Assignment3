@@ -176,6 +176,10 @@ class HealthServicesHeartRateSource(
 
     private val operationMutex = Mutex()
 
+    private var collectionRequested = false
+    private var activeOwner: Any? = null
+    private var stopping = false
+    private var exerciseEnded: CompletableDeferred<Unit>? = null
     private var startRequested = false
     private var ownsExercise = false
     private var sequence = 0L
@@ -191,13 +195,20 @@ class HealthServicesHeartRateSource(
         onRecord: (HeartRateRecord) -> Unit,
         onStatusChanged: (SensorStatus) -> Unit
     ) {
+        collectionRequested = true
+        recordCallback = onRecord
+        statusCallback = onStatusChanged
+
+        // Preserve a restart request until the old exercise and callback are gone.
+        if (stopping) {
+            Log.d(TAG, "Restart requested; waiting for cleanup")
+            onStatusChanged(SensorStatus.WAITING_FOR_DATA)
+            return
+        }
         if (startRequested || registeredCallback != null) {
             onStatusChanged(currentStatus)
             return
         }
-
-        recordCallback = onRecord
-        statusCallback = onStatusChanged
 
         if (!hasPermission()) {
             updateStatus(SensorStatus.PERMISSION_REQUIRED)
@@ -270,11 +281,7 @@ class HealthServicesHeartRateSource(
                     }
 
                     if (!startRequested) {
-                        if (ownsExercise) {
-                            endOwnedExercise()
-                        } else {
-                            clearCallback()
-                        }
+                        // The queued stop operation owns cleanup.
                         return@withLock
                     }
 
@@ -295,10 +302,7 @@ class HealthServicesHeartRateSource(
 
                     Log.d(TAG, "Exercise start request completed")
 
-                    // A stop request may arrive while startup is pending.
-                    if (!startRequested) {
-                        endOwnedExercise()
-                    }
+                    // A queued stop operation cleans up after this lock is released.
                 } catch (error: Exception) {
                     startRequested = false
                     Log.e(TAG, "Failed to start exercise", error)
@@ -344,12 +348,10 @@ class HealthServicesHeartRateSource(
                 if (state.isEnded) {
                     ownsExercise = false
                     startRequested = false
-                    updateStatus(SensorStatus.STOPPED)
-
-                    scope.launch {
-                        operationMutex.withLock {
-                            clearCallback()
-                        }
+                    exerciseEnded?.complete(Unit)
+                    if (!stopping) {
+                        // An externally ended exercise should not restart automatically.
+                        stop()
                     }
                     return
                 }
@@ -414,30 +416,45 @@ class HealthServicesHeartRateSource(
     }
 
     override fun stop() {
+        collectionRequested = false
         startRequested = false
+        updateStatus(SensorStatus.STOPPED)
+        recordCallback = null
+        statusCallback = null
+        if (stopping) return
+        stopping = true
 
         scope.launch {
             operationMutex.withLock {
                 try {
                     if (ownsExercise) {
-                        endOwnedExercise()
-                    } else {
-                        clearCallback()
-                        updateStatus(SensorStatus.STOPPED)
+                        val ended = CompletableDeferred<Unit>()
+                        exerciseEnded = ended
+                        // ENDED completes the signal directly, without acquiring this lock.
+                        withTimeout(10_000L) {
+                            exerciseClient.endExerciseAsync().await()
+                            ended.await()
+                        }
                     }
+                    clearCallback()
+                    if (registeredCallback == null) updateStatus(SensorStatus.STOPPED)
                 } catch (error: Exception) {
-                    Log.e(TAG, "Failed to end exercise", error)
+                    Log.e(TAG, "Failed to stop exercise", error)
                     updateStatus(SensorStatus.DATA_ERROR)
+                } finally {
+                    exerciseEnded = null
+                    stopping = false
                 }
             }
+
+            // Only restart after successful cleanup, and honor a later page exit.
+            val onRecord = recordCallback
+            val onStatus = statusCallback
+            if (collectionRequested && !ownsExercise && registeredCallback == null &&
+                onRecord != null && onStatus != null) {
+                start(onRecord, onStatus)
+            }
         }
-    }
-
-    private suspend fun endOwnedExercise() {
-        exerciseClient.endExerciseAsync().await()
-
-        // Keep the callback until the ENDED update arrives.
-        Log.d(TAG, "End requested; waiting for ENDED")
     }
 
     private suspend fun clearCallback() {
@@ -470,6 +487,38 @@ class HealthServicesHeartRateSource(
 
     companion object {
         private const val TAG = "HeartRateCheck"
+
+        @Volatile
+        private var instance: HealthServicesHeartRateSource? = null
+
+        // Share cleanup across Activity recreation; retain only application context.
+        private fun getInstance(context: Context): HealthServicesHeartRateSource =
+            instance ?: synchronized(this) {
+                instance ?: HealthServicesHeartRateSource(context.applicationContext).also {
+                    instance = it
+                }
+            }
+
+        fun forPage(context: Context): HeartRateSource {
+            val source = getInstance(context)
+            val owner = Any()
+            return object : HeartRateSource {
+                override fun start(
+                    onRecord: (HeartRateRecord) -> Unit,
+                    onStatusChanged: (SensorStatus) -> Unit
+                ) {
+                    source.activeOwner = owner
+                    source.start(onRecord, onStatusChanged)
+                }
+
+                override fun stop() {
+                    // A departing Activity must not stop a newer page's collection.
+                    if (source.activeOwner !== owner) return
+                    source.activeOwner = null
+                    source.stop()
+                }
+            }
+        }
 
         fun requiredPermission(): String {
             return if (Build.VERSION.SDK_INT >= 36) {

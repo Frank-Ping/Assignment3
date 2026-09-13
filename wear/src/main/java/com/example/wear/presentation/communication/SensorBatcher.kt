@@ -26,9 +26,12 @@ class SensorBatcher(
     }
 
     fun start() {
-        stop()
+        if (running) return
+
+        handler.removeCallbacksAndMessages(null)
+        acceleration.clear()
         sessionId = UUID.randomUUID().toString()
-        discarded = 0
+        discarded = 0L
         running = true
         report("Samples skipped before sending: 0")
         handler.postDelayed(tick, 500L)

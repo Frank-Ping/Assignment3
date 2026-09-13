@@ -41,9 +41,12 @@ import com.example.mobile_wearableapplication.communication.DeviceRole
 import com.example.mobile_wearableapplication.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+    private var pageStarted = false
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTask = object : Runnable {
         override fun run() {
+            if (!pageStarted) return
+
             refreshDiagnostics()
             refreshHandler.postDelayed(this, 1_000L)
         }
@@ -101,17 +104,30 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+
+        if (pageStarted) return
+        pageStarted = true
+
+        // Remove any previous refresh before scheduling a new one.
+        refreshHandler.removeCallbacks(refreshTask)
         refreshHandler.post(refreshTask)
         receiver.start()
         connectionManager.start()
     }
 
     override fun onStop() {
+        stopPageResources()
+        super.onStop()
+    }
+
+    private fun stopPageResources() {
+        if (!pageStarted) return
+        pageStarted = false
+
         refreshHandler.removeCallbacksAndMessages(null)
         receiver.stop()
         connectionManager.stop()
         peerNodeId = null
-        super.onStop()
     }
     private fun refreshDiagnostics() {
         val snapshot = ReceivedSensorStore.snapshot()

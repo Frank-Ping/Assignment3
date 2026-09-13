@@ -74,7 +74,7 @@ class SensorActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         accelerometerSource = SensorManagerAccelerometerSource(this)
 
-        heartRateSource = HealthServicesHeartRateSource(this)
+        heartRateSource = HealthServicesHeartRateSource.forPage(this)
 
         connectionManager = WearConnectionManager(
             context = this,
@@ -140,9 +140,15 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+
+        if (pageStarted) return
+        pageStarted = true
+
+        heartRateText = "-- bpm"
+        accelerationText = "X: --\nY: --\nZ: --"
+
         sender.start()
         connectionManager.start()
-        pageStarted = true
         batcher.start()
 
         accelerometerSource.start(
@@ -177,18 +183,22 @@ class SensorActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        stopPageResources()
+        super.onStop()
+    }
+
+    private fun stopPageResources() {
+        if (!pageStarted) return
         pageStarted = false
+
+        // Reject new records before stopping the data sources.
+        accelerometerSource.stop()
+        heartRateSource.stop()
+
         batcher.stop()
         sender.stop()
         connectionManager.stop()
         peerNodeId = null
-
-        accelerometerSource.stop()
-
-        // Collection and transmission are scoped to this foreground page.
-        heartRateSource.stop()
-
-        super.onStop()
     }
 
     private fun requestHeartRateCollection() {
@@ -212,6 +222,8 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun startHeartRateCollection() {
+        if (!pageStarted) return
+
         heartRateSource.start(
             onRecord = { record ->
                 if (!pageStarted) return@start
