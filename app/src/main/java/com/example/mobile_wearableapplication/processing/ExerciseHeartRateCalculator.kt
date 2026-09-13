@@ -2,11 +2,14 @@ package com.example.mobile_wearableapplication.processing
 
 /** Retains this session's HR so delayed phase confirmations can be applied by measurement time. */
 class ExerciseHeartRateCalculator {
+    private var currentUnavailable = false
+    fun markUnavailable() { currentUnavailable = true }
     private val samples = mutableListOf<HeartRateInput>()
     private val interruptedAfter = mutableSetOf<Long>()
     fun accept(sample: HeartRateInput) {
         if (sample.sequence <= 0 || sample.timestampNanos < 0) return
         if (samples.lastOrNull()?.let { sample.sequence <= it.sequence || sample.timestampNanos <= it.timestampNanos } == true) return
+        currentUnavailable = false
         samples.add(sample)
     }
     fun interrupt() { samples.lastOrNull()?.let { interruptedAfter.add(it.sequence) } }
@@ -35,7 +38,7 @@ class ExerciseHeartRateCalculator {
         recordPeak(current)
         if (covered == 0L) return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val valid = points.filter { it.bpm.isFinite() && it.bpm > 0 }
-        return MetricResult.Available(ExerciseHeartRate(if (finish == null) current else null,
+        return MetricResult.Available(ExerciseHeartRate(if (finish == null && !currentUnavailable) current else null,
             weighted / (covered / 1e9), peak), CalculationEvidence(CalculationWindow(start, end),
             valid.size.toLong(), if (end > start) covered.toDouble() / (end - start) else 0.0,
             valid.map { it.source }.toSet()))

@@ -3,16 +3,37 @@ package com.example.mobile_wearableapplication.processing
 /** Raw HR endpoint medians; intervals are half-open and use watch nanoseconds. */
 class RecoveryCalculator {
     private val samples = mutableListOf<HeartRateInput>()
-    private val movement = mutableListOf<Long>()
+    private data class MotionObservation(val time: Long, val moving: Boolean?)
+    private val motion = mutableListOf<MotionObservation>()
+    private val brokenMotion = mutableSetOf<Long>()
+    fun markMotionUnavailable() { motion.lastOrNull()?.let { brokenMotion.add(it.time) } }
     private val interruptedAfter = mutableSetOf<Long>()
     fun accept(sample: HeartRateInput) {
         if (sample.sequence <= 0 || sample.timestampNanos < 0 || samples.lastOrNull()?.let {
                 sample.sequence <= it.sequence || sample.timestampNanos <= it.timestampNanos } == true) return
         samples.add(sample)
     }
-    fun observe(time: Long, moving: Boolean) { if (moving) movement.add(time) }
+    fun observe(time: Long, moving: Boolean?) {
+        if (motion.lastOrNull()?.let { time <= it.time } == true) return
+        motion.add(MotionObservation(time, moving))
+    }
     fun interrupt() { samples.lastOrNull()?.let { interruptedAfter.add(it.sequence) } }
-    fun moved(t0: Long?): Boolean? = t0?.let { start -> movement.any { it >= start && it < start + 60_000_000_000L } }
+    fun moved(t0: Long?, now: Long? = null): Boolean? {
+        if (t0 == null) return null
+        val end = minOf(t0 + 60_000_000_000L, now ?: (t0 + 60_000_000_000L))
+        if (end <= t0) return null
+        if (motion.any { it.time >= t0 && it.time < end && it.moving == true }) return true
+        var covered = 0L
+        for ((i, point) in motion.withIndex()) {
+            if (point.time >= end) break
+            if (point.moving != false || point.time in brokenMotion) continue
+            val from = maxOf(t0, point.time)
+            val to = minOf(end, motion.getOrNull(i+1)?.time ?: end,
+                point.time + SensorPreprocessor.ACCELERATION_HOLD_NANOS)
+            covered += (to-from).coerceAtLeast(0L)
+        }
+        return if (covered == end-t0) false else null
+    }
     fun remaining(t0: Long?, now: Long?, ended: Long?): Long? {
         if (t0 == null || ended != null) return null
         return ((t0 + 60_000_000_000L - (now ?: t0)).coerceAtLeast(0L) + 999_999_999L) / 1_000_000_000L
@@ -38,6 +59,7 @@ class RecoveryCalculator {
         if (moved(t0) == true) return MetricResult.Unavailable(UnavailableReason.INTERRUPTED_BY_MOVEMENT)
         if (ended != null && ended < end) return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         if ((now ?: t0) < end) return MetricResult.Unavailable(UnavailableReason.COLLECTING_RECOVERY)
+        if (moved(t0) == null) return MetricResult.Unavailable(UnavailableReason.RECOVERY_MOTION_UNKNOWN)
         if (exerciseStart == null || exerciseStart > t0 - 5_000_000_000L)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val (h0, first) = endpoint(t0 - 5_000_000_000L, t0)
