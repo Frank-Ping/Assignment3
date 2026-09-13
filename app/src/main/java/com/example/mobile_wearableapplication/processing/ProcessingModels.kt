@@ -57,6 +57,8 @@ data class ProcessingQuality(
 )
 data class ProcessingSnapshot(
     val session: ProcessingSession? = null,
+    val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
+    val endedAtNanos: Long? = null,
     val acceleration: InputSummary = InputSummary(),
     val heartRate: InputSummary = InputSummary(),
     val restingHeartRate: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),

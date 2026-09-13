@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import com.example.mobile_wearableapplication.communication.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,8 @@ import com.example.mobile_wearableapplication.communication.WearConnectionManage
 import com.example.mobile_wearableapplication.processing.MetricResult
 
 class SensorActivity : ComponentActivity() {
+    private lateinit var sessionClient: PhoneSessionClient
+    private var controls by mutableStateOf(SessionControlUi())
     private var pageStarted = false
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTask = object : Runnable {
@@ -69,11 +73,17 @@ class SensorActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        sessionClient = PhoneSessionClient(this, { node, state ->
+            ReceivedSensorStore.confirmSession(node, state)
+            refreshDiagnostics()
+        }, { controls = it })
+
         connectionManager = WearConnectionManager(
             context = this,
             localRole = DeviceRole.PHONE
         ) { info ->
             peerNodeId = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
+            sessionClient.setPeer(peerNodeId)
             connectionText = when (info.status) {
                 ConnectionStatus.STOPPED -> "Connection stopped"
                 ConnectionStatus.SEARCHING -> "Searching for watch"
@@ -99,7 +109,10 @@ class SensorActivity : ComponentActivity() {
                     accelerationPreview = accelerationPreview,
                     heartRatePreview = heartRatePreview,
                     sessionText = sessionText,
-                    processingText = processingText
+                    processingText = processingText,
+                    controls = controls,
+                    onAction = { sessionClient.command(it) },
+                    onSync = { sessionClient.sync() }
                 )
             }
         }
@@ -114,6 +127,7 @@ class SensorActivity : ComponentActivity() {
         // Remove any previous refresh before scheduling a new one.
         refreshHandler.removeCallbacks(refreshTask)
         refreshHandler.post(refreshTask)
+        sessionClient.start()
         receiver.start()
         connectionManager.start()
     }
@@ -128,6 +142,7 @@ class SensorActivity : ComponentActivity() {
         pageStarted = false
 
         refreshHandler.removeCallbacksAndMessages(null)
+        sessionClient.stop()
         receiver.stop()
         connectionManager.stop()
         peerNodeId = null
@@ -186,7 +201,10 @@ private fun SensorPage(
     accelerationPreview: String = "Acceleration: --",
     heartRatePreview: String = "Heart rate: --",
     sessionText: String = "No session received",
-    processingText: String = "Processing: no session"
+    processingText: String = "Processing: no session",
+    controls: SessionControlUi = SessionControlUi(),
+    onAction: (SessionAction) -> Unit = {},
+    onSync: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -227,6 +245,19 @@ private fun SensorPage(
                 textAlign = TextAlign.Center
             )
 
+            Text("${controls.state?.phase?.label ?: "No confirmed phase"} · ${controls.state?.lifecycle ?: "Unknown"}", color = Color.White)
+            Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
+            controls.state?.let { state ->
+                Text("Revision: ${state.revision}\nWatch phase time: ${state.transitions.lastOrNull()?.watchElapsedTimeNanos ?: "—"} ns",
+                    color = Color.Gray, fontSize = 12.sp)
+            }
+            SessionAction.entries.forEach { action ->
+                Button(onClick = { onAction(action) }, enabled = controls.synchronized && !controls.pending && controls.state?.allows(action) == true) {
+                    Text(action.label)
+                }
+            }
+            Button(onClick = onSync, enabled = !controls.pending) { Text("Sync state") }
+
             Text(accelerationPreview, color = Color.White, fontSize = 14.sp)
             Text(heartRatePreview, color = Color.White, fontSize = 14.sp)
             Text(processingText, color = Color.LightGray, fontSize = 12.sp)
@@ -250,3 +281,4 @@ private fun SensorPagePreview() {
         SensorPage(onBack = {})
     }
 }
+

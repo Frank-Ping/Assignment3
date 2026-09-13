@@ -49,7 +49,20 @@ class SensorProcessingEngine {
         }
         if (previous != null && (event.revision <= previous.revision ||
                 event.watchElapsedTimeNanos < previous.watchElapsedTimeNanos)) return
-        state = state.copy(workoutState = MetricResult.Available(event, CalculationEvidence()))
+        state = state.copy(workoutState = MetricResult.Available(event, CalculationEvidence()),
+            phaseHistory = state.phaseHistory + event)
+    }
+
+    @Synchronized
+    fun endSession(session: ProcessingSession, watchElapsedTimeNanos: Long) {
+        if (session == state.session) state = state.copy(endedAtNanos = watchElapsedTimeNanos)
+    }
+
+    /** Resolve delayed samples by watch measurement time, not the current UI phase. */
+    @Synchronized
+    fun phaseAt(watchElapsedTimeNanos: Long): WorkoutPhase? {
+        if (state.endedAtNanos?.let { watchElapsedTimeNanos >= it } == true) return null
+        return state.phaseHistory.lastOrNull { it.watchElapsedTimeNanos <= watchElapsedTimeNanos }?.phase
     }
 
     @Synchronized

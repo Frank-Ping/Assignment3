@@ -9,6 +9,7 @@ import com.example.mobile_wearableapplication.processing.ProcessingSnapshot
 import com.example.mobile_wearableapplication.processing.SampleSource
 import com.example.mobile_wearableapplication.processing.SensorProcessingEngine
 import com.example.mobile_wearableapplication.processing.ConfirmedPhaseEvent
+import com.example.mobile_wearableapplication.processing.WorkoutPhase
 
 data class ReceivedSample(
     val sample: WireSample,
@@ -52,18 +53,40 @@ object ReceivedSensorStore {
     private val sessions = linkedMapOf<Pair<String, String>, MutableMap<WireDataType, Stream>>()
     private var activeSession: Pair<String, String>? = null
     private val processor = SensorProcessingEngine()
+    private var confirmedState: SessionState? = null
+
+    @Synchronized
+    fun confirmSession(nodeId: String, state: SessionState) {
+        val id = state.sessionId
+        if (id == null) {
+            activeSession = null
+            confirmedState = state
+            processor.reset()
+            return
+        }
+        val key = nodeId to id
+        val previous = confirmedState
+        if (activeSession == key && previous != null && state.revision < previous.revision) return
+        activeSession = key
+        confirmedState = state
+        sessions.getOrPut(key) { mutableMapOf() }
+        while (sessions.size > SESSION_CAPACITY) sessions.remove(sessions.keys.first { it != key })
+        val session = ProcessingSession(nodeId, id)
+        processor.startSession(session)
+        state.transitions.forEach {
+            processor.acceptConfirmedPhase(ConfirmedPhaseEvent(session, it.revision,
+                WorkoutPhase.valueOf(it.phase.name), it.watchElapsedTimeNanos))
+        }
+        state.endedAtNanos?.let { processor.endSession(session, it) }
+    }
 
     @Synchronized
     fun accept(nodeId: String, batch: SensorBatch) {
         val key = nodeId to batch.sessionId
-        val streams = sessions[key] ?: mutableMapOf<WireDataType, Stream>().also {
-            sessions[key] = it
-            activeSession = key
-            // Temporary session ownership follows the existing store selection.
-            // Step 3 will select sessions using watch-confirmed session state.
-            processor.startSession(ProcessingSession(nodeId, batch.sessionId))
-            if (sessions.size > SESSION_CAPACITY) sessions.remove(sessions.keys.first())
-        }
+        // A sensor batch cannot select or restart a session. No pre-confirmation replay yet.
+        check(key == activeSession) { "Batch does not belong to a confirmed session" }
+        val state = checkNotNull(confirmedState)
+        val streams = sessions.getValue(key)
         val stream = streams.getOrPut(batch.dataType) { Stream() }
         if (!stream.batchIds.add(batch.batchId)) {
             stream.duplicateBatches++
@@ -75,6 +98,8 @@ object ReceivedSensorStore {
         val now = SystemClock.elapsedRealtime()
         val newlyAccepted = mutableListOf<WireSample>()
         for (sample in batch.samples) {
+            if (sample.timestampNanos < state.transitions.first().watchElapsedTimeNanos ||
+                state.endedAtNanos?.let { sample.timestampNanos >= it } == true) continue
             val received = ReceivedSample(sample, batch.source, now)
             if (stream.samples.putIfAbsent(sample.timestampNanos, received) != null) continue
             newlyAccepted.add(sample)

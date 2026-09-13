@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.padding
 import com.example.wear.presentation.communication.SensorBatcher
 import com.example.wear.presentation.communication.SensorDataSender
 import android.os.Bundle
+import android.os.SystemClock
+import com.example.wear.presentation.communication.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -36,6 +38,45 @@ import com.example.wear.presentation.communication.DeviceRole
 import com.example.wear.presentation.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+    private lateinit var sessionTransport: SessionTransport
+    private var phaseText by mutableStateOf("No session")
+    private var sessionMessage by mutableStateOf("Waiting for phone command")
+    private var collecting = false
+    private var collectionGeneration = 0
+    private val sessionController get() = foregroundSession
+
+    companion object {
+        // Retains interruption state across Activity recreation, not process death.
+        private val foregroundSession = WatchSessionController({ SystemClock.elapsedRealtimeNanos() })
+    }
+
+    private fun showSession() {
+        val state = sessionController.state
+        phaseText = "${state.phase?.label ?: "No session"} · ${state.lifecycle}\n" +
+            "Revision: ${state.revision}" +
+            (state.transitions.lastOrNull()?.let { "\nWatch phase time: ${it.watchElapsedTimeNanos} ns" } ?: "")
+    }
+
+    private fun receiveSession(node: String, path: String, bytes: ByteArray) {
+        val reply = when (path) {
+            CommunicationProtocol.SESSION_QUERY_PATH -> SessionReply(SessionProtocol.decodeQuery(bytes), true, null, sessionController.state)
+            CommunicationProtocol.SESSION_COMMAND_PATH -> {
+                val before = sessionController.state
+                val result = sessionController.execute(node, SessionProtocol.decodeCommand(bytes))
+                val after = sessionController.state
+                if (before != after) {
+                    if (after.lifecycle == SessionLifecycle.RUNNING && before.sessionId != after.sessionId) startSessionCollection()
+                    else if (after.lifecycle != SessionLifecycle.RUNNING) stopSessionCollection()
+                }
+                result
+            }
+            else -> return
+        }
+        showSession()
+        sessionMessage = reply.error ?: "Session confirmed"
+        sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH, SessionProtocol.encodeReply(reply))
+    }
+
     private lateinit var sender: SensorDataSender
     private var peerNodeId by mutableStateOf<String?>(null)
     private var transferText by mutableStateOf("Sender stopped")
@@ -64,9 +105,9 @@ class SensorActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            if (granted && pageStarted) {
+            if (granted && pageStarted && collecting) {
                 startHeartRateCollection()
-            } else if (!granted) {
+            } else if (!granted && pageStarted && collecting) {
                 logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
             }
         }
@@ -93,6 +134,10 @@ class SensorActivity : ComponentActivity() {
 
         sender = SensorDataSender(this) { transferText = it }
         batcher = SensorBatcher({ peerNodeId }, sender) { skippedText = it }
+
+        sessionTransport = SessionTransport(this, { peerNodeId }, ::receiveSession,
+            { sessionMessage = "Ready for phone commands" }, { sessionMessage = it })
+        showSession()
 
         setContent {
             MobileWearableApplicationTheme {
@@ -124,6 +169,8 @@ class SensorActivity : ComponentActivity() {
                         color = Color.White,
                         fontSize = 14.sp
                     )
+                    Text(phaseText, color = Color.White, fontSize = 14.sp)
+                    Text(sessionMessage, color = Color.LightGray, fontSize = 12.sp)
                     Text("Acceleration: $accelerationStatus", color = Color.LightGray, fontSize = 12.sp)
                     Text("Heart rate: $heartRateStatus", color = Color.LightGray, fontSize = 12.sp)
                     Text(skippedText, color = Color.LightGray, fontSize = 12.sp)
@@ -149,11 +196,22 @@ class SensorActivity : ComponentActivity() {
 
         sender.start()
         connectionManager.start()
-        batcher.start()
+        sessionTransport.start()
+        showSession()
+    }
+
+    private fun startSessionCollection() {
+        if (!pageStarted || collecting) return
+        collecting = true
+        val token = ++collectionGeneration
+        heartRateText = "-- bpm"
+        accelerationText = "X: --\nY: --\nZ: --"
+        batcher.start(checkNotNull(sessionController.state.sessionId))
 
         accelerometerSource.start(
             onRecord = { record ->
-                if (!pageStarted) return@start
+                if (!pageStarted || !collecting || token != collectionGeneration) return@start
+                if (record.timestampNanos < sessionController.state.transitions.first().watchElapsedTimeNanos) return@start
                 batcher.add(record)
                 accelerationText = String.format(
                     Locale.US, "X: %.2f\nY: %.2f\nZ: %.2f",
@@ -172,6 +230,7 @@ class SensorActivity : ComponentActivity() {
                 }
             },
             onStatusChanged = { status ->
+                if (token != collectionGeneration) return@start
                 accelerationStatus = status
                 if (lastLoggedStatus != status.name) {
                     Log.d("AccelCheck", "status=$status")
@@ -191,14 +250,25 @@ class SensorActivity : ComponentActivity() {
         if (!pageStarted) return
         pageStarted = false
 
+        sessionController.interrupt()
+        stopSessionCollection()
+        sessionTransport.stop()
+        sender.stop()
+        connectionManager.stop()
+        peerNodeId = null
+        showSession()
+    }
+
+    private fun stopSessionCollection() {
+        collecting = false
+        collectionGeneration++
         // Reject new records before stopping the data sources.
         accelerometerSource.stop()
         heartRateSource.stop()
 
         batcher.stop()
-        sender.stop()
-        connectionManager.stop()
-        peerNodeId = null
+        accelerationStatus = SensorStatus.STOPPED
+        heartRateStatus = SensorStatus.STOPPED
     }
 
     private fun requestHeartRateCollection() {
@@ -222,11 +292,13 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun startHeartRateCollection() {
-        if (!pageStarted) return
+        if (!pageStarted || !collecting) return
+        val token = collectionGeneration
 
         heartRateSource.start(
             onRecord = { record ->
-                if (!pageStarted) return@start
+                if (!pageStarted || !collecting || token != collectionGeneration) return@start
+                if (record.timestampNanos < sessionController.state.transitions.first().watchElapsedTimeNanos) return@start
                 batcher.add(record)
                 heartRateText = String.format(Locale.US, "%.0f bpm", record.bpm)
                 Log.d(
@@ -238,7 +310,7 @@ class SensorActivity : ComponentActivity() {
                 )
             },
             onStatusChanged = { status ->
-                logHeartRateStatus(status)
+                if (token == collectionGeneration && collecting) logHeartRateStatus(status)
             }
         )
     }
@@ -252,3 +324,4 @@ class SensorActivity : ComponentActivity() {
     }
 
 }
+
