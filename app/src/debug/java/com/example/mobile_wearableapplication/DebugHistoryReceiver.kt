@@ -10,6 +10,11 @@ import kotlin.random.Random
 /** adb shell am broadcast -n <package>/.DebugHistoryReceiver --ei seed 551 */
 class DebugHistoryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.hasExtra("sessionAction")) {
+            resultData = HistoryPreviewStore.sessionAction?.invoke(intent.getStringExtra("sessionAction") ?: "")
+                ?: "Open phone SensorActivity first"
+            return
+        }
         if (intent.getBooleanExtra("clearHeartRate", false)) {
             HistoryPreviewStore.heartRate = null
             resultData = "Live HR preview cleared"

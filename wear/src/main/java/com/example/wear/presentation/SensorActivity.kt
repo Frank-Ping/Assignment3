@@ -318,6 +318,18 @@ class SensorActivity : ComponentActivity() {
         pageStarted = true
         if (activePageOwner != null && activePageOwner !== pageOwner) sessionController.interrupt()
         activePageOwner = pageOwner
+        DemoControl.configure = { name ->
+            val scenario = HeartRateDemoScenario.entries.firstOrNull { it.name == name }
+            if (collecting) "Finish session before changing scenario"
+            else if (scenario == null) "Use NORMAL, MISSING, BOUNDARY or NO_RECOVERY"
+            else {
+                selectedSource = HeartRateSourceType.DEMO
+                demoScenario = scenario
+                heartRateText = "-- bpm"
+                heartRateStatus = SensorStatus.NOT_STARTED
+                "DEMO configured: ${scenario.name}"
+            }
+        }
 
         heartRateText = "-- bpm"
         accelerationText = "X: --\nY: --\nZ: --"
@@ -393,6 +405,7 @@ class SensorActivity : ComponentActivity() {
 
         pageHandler.removeCallbacksAndMessages(null)
         if (activePageOwner === pageOwner) {
+            DemoControl.configure = null
             sessionController.interrupt()
             // Best effort only; reconnect/query remains the authority if this is lost.
             if (sessionController.state.lifecycle == SessionLifecycle.INTERRUPTED && sessionTransport.ready) {
