@@ -23,7 +23,19 @@ data class ReceivedStreamSnapshot(
     val batches: Long,
     val receivedSamples: Long,
     val duplicateBatches: Long,
-    val lastNewSampleAtMillis: Long?
+    val lastNewSampleAtMillis: Long?,
+    val freshSinceResume: Boolean
+)
+
+/** Phone-local observation interval, not an exact watch sample-loss interval. */
+data class ReceptionInterruption(
+    val sessionId: String, val startedAtMillis: Long,
+    val endedAtMillis: Long? = null, val reason: String
+)
+data class ReceptionDiagnostics(
+    val ready: Boolean, val message: String,
+    val interruptions: List<ReceptionInterruption>, val rejectedBatches: Long,
+    val sessionLifecycle: SessionLifecycle?
 )
 
 data class ReceivedSessionSnapshot(
@@ -48,19 +60,45 @@ object ReceivedSensorStore {
         var receivedSamples = 0L
         var duplicateBatches = 0L
         var lastNewSampleAtMillis: Long? = null
+        var freshSinceResume = false
     }
 
     private val sessions = linkedMapOf<Pair<String, String>, MutableMap<WireDataType, Stream>>()
     private var activeSession: Pair<String, String>? = null
     private val processor = SensorProcessingEngine()
     private var confirmedState: SessionState? = null
+    private var receptionReady = false
+    private var receptionMessage = "Waiting for session confirmation"
+    private val interruptions = mutableListOf<ReceptionInterruption>()
+    private var rejectedBatches = 0L
+
+    @Synchronized
+    fun suspendReception(reason: String) {
+        receptionReady = false
+        receptionMessage = reason
+        activeSession?.let { sessions[it] }?.values?.forEach { it.freshSinceResume = false }
+        val id = activeSession?.second ?: return
+        if (confirmedState?.lifecycle != SessionLifecycle.RUNNING) return
+        if (interruptions.lastOrNull()?.endedAtMillis == null && interruptions.lastOrNull()?.sessionId == id) return
+        interruptions.add(ReceptionInterruption(id, SystemClock.elapsedRealtime(), reason = reason))
+        if (interruptions.size > 32) interruptions.removeAt(0)
+    }
+
+    @Synchronized
+    fun receptionDiagnostics() = ReceptionDiagnostics(receptionReady, receptionMessage,
+        interruptions.toList(), rejectedBatches, confirmedState?.lifecycle)
 
     @Synchronized
     fun confirmSession(nodeId: String, state: SessionState) {
+        if (interruptions.lastOrNull()?.endedAtMillis == null && interruptions.isNotEmpty()) {
+            interruptions[interruptions.lastIndex] = interruptions.last().copy(endedAtMillis = SystemClock.elapsedRealtime())
+        }
         val id = state.sessionId
         if (id == null) {
             activeSession = null
             confirmedState = state
+            receptionReady = false
+            receptionMessage = "Watch has no active session; previous session is not resumed"
             processor.reset()
             return
         }
@@ -69,6 +107,12 @@ object ReceivedSensorStore {
         if (activeSession == key && previous != null && state.revision < previous.revision) return
         activeSession = key
         confirmedState = state
+        receptionReady = true
+        receptionMessage = when (state.lifecycle) {
+            SessionLifecycle.RUNNING -> "Session confirmed; waiting for fresh samples after any interruption"
+            SessionLifecycle.INTERRUPTED -> "Watch collection interrupted; no automatic restart"
+            else -> "Session ended; displaying history"
+        }
         sessions.getOrPut(key) { mutableMapOf() }
         while (sessions.size > SESSION_CAPACITY) sessions.remove(sessions.keys.first { it != key })
         val session = ProcessingSession(nodeId, id)
@@ -84,7 +128,10 @@ object ReceivedSensorStore {
     fun accept(nodeId: String, batch: SensorBatch) {
         val key = nodeId to batch.sessionId
         // A sensor batch cannot select or restart a session. No pre-confirmation replay yet.
-        check(key == activeSession) { "Batch does not belong to a confirmed session" }
+        if (!receptionReady || key != activeSession) {
+            rejectedBatches++
+            error("Receiving suspended or batch belongs to an unconfirmed session; no replay")
+        }
         val state = checkNotNull(confirmedState)
         val streams = sessions.getValue(key)
         val stream = streams.getOrPut(batch.dataType) { Stream() }
@@ -107,6 +154,7 @@ object ReceivedSensorStore {
             if (latest == null || sample.timestampNanos > latest.sample.timestampNanos) {
                 stream.latest = received
                 stream.lastNewSampleAtMillis = now
+                stream.freshSinceResume = true
             }
         }
         val capacity = if (batch.dataType == WireDataType.ACCELEROMETER) {
@@ -141,7 +189,7 @@ object ReceivedSensorStore {
         val key = activeSession ?: return null
         val streams = sessions.getValue(key).mapValues { (_, stream) ->
             ReceivedStreamSnapshot(stream.latest, stream.samples.values.toList(), stream.batches,
-                stream.receivedSamples, stream.duplicateBatches, stream.lastNewSampleAtMillis)
+                stream.receivedSamples, stream.duplicateBatches, stream.lastNewSampleAtMillis, stream.freshSinceResume)
         }
         return ReceivedSessionSnapshot(key.first, key.second, streams)
     }

@@ -76,14 +76,24 @@ class SensorActivity : ComponentActivity() {
         sessionClient = PhoneSessionClient(this, { node, state ->
             ReceivedSensorStore.confirmSession(node, state)
             refreshDiagnostics()
-        }, { controls = it })
+        }, { controls = it }, { reason ->
+            ReceivedSensorStore.suspendReception(reason)
+            refreshDiagnostics()
+        })
 
         connectionManager = WearConnectionManager(
             context = this,
             localRole = DeviceRole.PHONE
         ) { info ->
-            peerNodeId = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
-            sessionClient.setPeer(peerNodeId)
+            val nextPeer = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
+            if (peerNodeId != nextPeer && ::receiver.isInitialized) receiver.peerChanged()
+            peerNodeId = nextPeer
+            sessionClient.setPeer(peerNodeId, when (info.status) {
+                ConnectionStatus.WAITING_FOR_APP -> "Watch app not responding (device may still be reachable)"
+                ConnectionStatus.DISCONNECTED -> "Device link unavailable"
+                ConnectionStatus.ERROR -> "Connection error"
+                else -> "Connection unavailable"
+            })
             connectionText = when (info.status) {
                 ConnectionStatus.STOPPED -> "Connection stopped"
                 ConnectionStatus.SEARCHING -> "Searching for watch"
@@ -95,6 +105,7 @@ class SensorActivity : ComponentActivity() {
         }
 
         receiver = SensorDataReceiver(this, { peerNodeId }, { batch ->
+            check(pageStarted) { "Phone page not active" }
             val node = checkNotNull(peerNodeId)
             ReceivedSensorStore.accept(node, batch)
             refreshDiagnostics()
@@ -149,8 +160,16 @@ class SensorActivity : ComponentActivity() {
     }
     private fun refreshDiagnostics() {
         val snapshot = ReceivedSensorStore.snapshot()
+        val reception = ReceivedSensorStore.receptionDiagnostics()
         sessionText = snapshot?.let { "Session: ${it.sessionId}\nWatch: ${it.nodeId}" }
             ?: "No session received"
+        val lastInterruption = reception.interruptions.lastOrNull()
+        sessionText += "\n${reception.message}\nReception interruptions retained: ${reception.interruptions.size}" +
+            "\nRejected while unconfirmed: ${reception.rejectedBatches}" +
+            (lastInterruption?.let {
+                val duration = ((it.endedAtMillis ?: SystemClock.elapsedRealtime()) - it.startedAtMillis) / 1000
+                "\nLast interruption: ${duration}s — ${it.reason}\nContinuity unknown; no offline replay."
+            } ?: "")
         accelerationPreview = formatStream(snapshot, WireDataType.ACCELEROMETER)
         heartRatePreview = formatStream(snapshot, WireDataType.HEART_RATE)
         val processing = ReceivedSensorStore.processingSnapshot()
@@ -177,7 +196,14 @@ class SensorActivity : ComponentActivity() {
         val sample = received.sample
         val ageMillis = (SystemClock.elapsedRealtime() -
             checkNotNull(stream.lastNewSampleAtMillis)).coerceAtLeast(0L)
-        val freshness = if (ageMillis >= ReceivedSensorStore.STALE_AFTER_MILLIS) "Stale" else "Recent"
+        val reception = ReceivedSensorStore.receptionDiagnostics()
+        val freshness = when {
+            !reception.ready -> "Historical / awaiting session confirmation"
+            reception.sessionLifecycle != SessionLifecycle.RUNNING -> "Historical / collection ended"
+            !stream.freshSinceResume -> "Historical / waiting for new sample"
+            ageMillis >= ReceivedSensorStore.STALE_AFTER_MILLIS -> "Stale"
+            else -> "Recent"
+        }
         val value = if (type == WireDataType.ACCELEROMETER) {
             String.format(Locale.US, "X: %.3f  Y: %.3f  Z: %.3f m/s^2", sample.x, sample.y, sample.z)
         } else String.format(Locale.US, "%.1f bpm", sample.bpm)
@@ -245,7 +271,7 @@ private fun SensorPage(
                 textAlign = TextAlign.Center
             )
 
-            Text("${controls.state?.phase?.label ?: "No confirmed phase"} · ${controls.state?.lifecycle ?: "Unknown"}", color = Color.White)
+            Text("${if (controls.synchronized) "" else "Last confirmed: "}${controls.state?.phase?.label ?: "Unknown"} · ${controls.state?.lifecycle ?: "Unknown"}", color = Color.White)
             Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
             controls.state?.let { state ->
                 Text("Revision: ${state.revision}\nWatch phase time: ${state.transitions.lastOrNull()?.watchElapsedTimeNanos ?: "—"} ns",
@@ -256,7 +282,7 @@ private fun SensorPage(
                     Text(action.label)
                 }
             }
-            Button(onClick = onSync, enabled = !controls.pending) { Text("Sync state") }
+            Button(onClick = onSync, enabled = controls.connected && !controls.pending) { Text("Sync state") }
 
             Text(accelerationPreview, color = Color.White, fontSize = 14.sp)
             Text(heartRatePreview, color = Color.White, fontSize = 14.sp)

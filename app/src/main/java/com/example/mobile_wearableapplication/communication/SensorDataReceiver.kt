@@ -17,13 +17,17 @@ class SensorDataReceiver(
     private val handler = Handler(Looper.getMainLooper())
     private var listener: MessageClient.OnMessageReceivedListener? = null
     private var generation = 0
+    @Volatile private var peerEpoch = 0
+
+    fun peerChanged() { peerEpoch++ }
 
     fun start() {
         if (listener != null) return
         val token = ++generation
         val callback = MessageClient.OnMessageReceivedListener { event ->
+            val connection = peerEpoch
             handler.post {
-                if (token == generation && event.path == CommunicationProtocol.SENSOR_BATCH_PATH) {
+                if (token == generation && connection == peerEpoch && event.path == CommunicationProtocol.SENSOR_BATCH_PATH) {
                     if (event.sourceNodeId != expectedNodeId()) {
                         report("Rejected unconfirmed peer")
                     } else {
@@ -37,9 +41,9 @@ class SensorDataReceiver(
                                         )
                                         client.sendMessage(event.sourceNodeId, CommunicationProtocol.SENSOR_ACK_PATH, ack)
                                             .addOnSuccessListener {
-                                                if (token == generation) report("ACK queued: ${batch.batchId}")
+                                                if (token == generation && connection == peerEpoch) report("ACK queued: ${batch.batchId}")
                                             }.addOnFailureListener {
-                                                if (token == generation) report("ACK failed: ${it.message}")
+                                                if (token == generation && connection == peerEpoch) report("ACK failed: ${it.message}")
                                             }
                                     },
                                     onFailure = { report("Acceptance failed: ${it.message}") }
@@ -64,6 +68,7 @@ class SensorDataReceiver(
 
     fun stop() {
         generation++
+        peerEpoch++
         handler.removeCallbacksAndMessages(null)
         listener?.let { client.removeListener(it) }
         listener = null

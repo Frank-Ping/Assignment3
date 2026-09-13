@@ -7,6 +7,8 @@ import com.example.wear.presentation.communication.SensorBatcher
 import com.example.wear.presentation.communication.SensorDataSender
 import android.os.Bundle
 import android.os.SystemClock
+import android.os.Handler
+import android.os.Looper
 import com.example.wear.presentation.communication.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -43,11 +45,33 @@ class SensorActivity : ComponentActivity() {
     private var sessionMessage by mutableStateOf("Waiting for phone command")
     private var collecting = false
     private var collectionGeneration = 0
+    private val pageOwner = Any()
+    private val pageHandler = Handler(Looper.getMainLooper())
+    private var lastAccelerationAt: Long? = null
+    private var lastHeartRateAt: Long? = null
+    private val freshnessTask = object : Runnable {
+        override fun run() {
+            if (!pageStarted || activePageOwner !== pageOwner) return
+            val now = SystemClock.elapsedRealtime()
+            if (collecting) {
+                if (accelerationStatus == SensorStatus.ACTIVE && lastAccelerationAt?.let { now - it >= 3_000L } == true) {
+                    accelerationStatus = SensorStatus.WAITING_FOR_DATA
+                    accelerationText = "X: --\nY: --\nZ: -- (stale)"
+                }
+                if (heartRateStatus == SensorStatus.ACTIVE && lastHeartRateAt?.let { now - it >= 10_000L } == true) {
+                    heartRateStatus = SensorStatus.WAITING_FOR_DATA
+                    heartRateText = "-- bpm (stale)"
+                }
+            }
+            pageHandler.postDelayed(this, 1_000L)
+        }
+    }
     private val sessionController get() = foregroundSession
 
     companion object {
         // Retains interruption state across Activity recreation, not process death.
         private val foregroundSession = WatchSessionController({ SystemClock.elapsedRealtimeNanos() })
+        private var activePageOwner: Any? = null
     }
 
     private fun showSession() {
@@ -58,6 +82,7 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun receiveSession(node: String, path: String, bytes: ByteArray) {
+        if (!pageStarted || activePageOwner !== pageOwner) return
         val reply = when (path) {
             CommunicationProtocol.SESSION_QUERY_PATH -> SessionReply(SessionProtocol.decodeQuery(bytes), true, null, sessionController.state)
             CommunicationProtocol.SESSION_COMMAND_PATH -> {
@@ -100,14 +125,19 @@ class SensorActivity : ComponentActivity() {
     private var heartRateText by mutableStateOf("-- bpm")
     private var accelerationText by mutableStateOf("X: --\nY: --\nZ: --")
     private var permissionRequested = false
+    private var permissionGeneration: Int? = null
 
     private val heartRatePermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            if (granted && pageStarted && collecting) {
+            val currentRequest = permissionGeneration == collectionGeneration
+            permissionRequested = false
+            permissionGeneration = null
+            if (!currentRequest || !pageStarted || !collecting || activePageOwner !== pageOwner) return@registerForActivityResult
+            if (granted) {
                 startHeartRateCollection()
-            } else if (!granted && pageStarted && collecting) {
+            } else {
                 logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
             }
         }
@@ -121,7 +151,9 @@ class SensorActivity : ComponentActivity() {
             context = this,
             localRole = DeviceRole.WATCH
         ) { info ->
-            peerNodeId = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
+            val nextPeer = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
+            if (peerNodeId != nextPeer && ::sessionTransport.isInitialized) sessionTransport.peerChanged()
+            peerNodeId = nextPeer
             connectionText = when (info.status) {
                 ConnectionStatus.STOPPED -> "Connection stopped"
                 ConnectionStatus.SEARCHING -> "Searching for phone"
@@ -190,29 +222,41 @@ class SensorActivity : ComponentActivity() {
 
         if (pageStarted) return
         pageStarted = true
+        if (activePageOwner != null && activePageOwner !== pageOwner) sessionController.interrupt()
+        activePageOwner = pageOwner
 
         heartRateText = "-- bpm"
         accelerationText = "X: --\nY: --\nZ: --"
+        if (sessionController.state.lifecycle != SessionLifecycle.IDLE) {
+            accelerationStatus = SensorStatus.STOPPED
+            heartRateStatus = SensorStatus.STOPPED
+        }
 
         sender.start()
-        connectionManager.start()
         sessionTransport.start()
+        connectionManager.start()
+        pageHandler.removeCallbacksAndMessages(null)
+        pageHandler.post(freshnessTask)
         showSession()
     }
 
     private fun startSessionCollection() {
-        if (!pageStarted || collecting) return
+        if (!pageStarted || collecting || activePageOwner !== pageOwner) return
         collecting = true
         val token = ++collectionGeneration
+        lastAccelerationAt = null
+        lastHeartRateAt = null
         heartRateText = "-- bpm"
         accelerationText = "X: --\nY: --\nZ: --"
         batcher.start(checkNotNull(sessionController.state.sessionId))
 
         accelerometerSource.start(
             onRecord = { record ->
-                if (!pageStarted || !collecting || token != collectionGeneration) return@start
+                if (!pageStarted || !collecting || token != collectionGeneration || activePageOwner !== pageOwner) return@start
                 if (record.timestampNanos < sessionController.state.transitions.first().watchElapsedTimeNanos) return@start
                 batcher.add(record)
+                lastAccelerationAt = SystemClock.elapsedRealtime()
+                accelerationStatus = SensorStatus.ACTIVE
                 accelerationText = String.format(
                     Locale.US, "X: %.2f\nY: %.2f\nZ: %.2f",
                     record.x, record.y, record.z
@@ -230,7 +274,7 @@ class SensorActivity : ComponentActivity() {
                 }
             },
             onStatusChanged = { status ->
-                if (token != collectionGeneration) return@start
+                if (token != collectionGeneration || activePageOwner !== pageOwner) return@start
                 accelerationStatus = status
                 if (lastLoggedStatus != status.name) {
                     Log.d("AccelCheck", "status=$status")
@@ -250,7 +294,18 @@ class SensorActivity : ComponentActivity() {
         if (!pageStarted) return
         pageStarted = false
 
-        sessionController.interrupt()
+        pageHandler.removeCallbacksAndMessages(null)
+        if (activePageOwner === pageOwner) {
+            sessionController.interrupt()
+            // Best effort only; reconnect/query remains the authority if this is lost.
+            if (sessionController.state.lifecycle == SessionLifecycle.INTERRUPTED && sessionTransport.ready) {
+                peerNodeId?.let { node ->
+                    sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH,
+                        SessionProtocol.encodeReply(SessionReply("session-interrupted", true, null, sessionController.state)))
+                }
+            }
+            activePageOwner = null
+        }
         stopSessionCollection()
         sessionTransport.stop()
         sender.stop()
@@ -269,6 +324,8 @@ class SensorActivity : ComponentActivity() {
         batcher.stop()
         accelerationStatus = SensorStatus.STOPPED
         heartRateStatus = SensorStatus.STOPPED
+        heartRateText = "-- bpm (stopped)"
+        accelerationText = "X: --\nY: --\nZ: -- (stopped)"
     }
 
     private fun requestHeartRateCollection() {
@@ -285,6 +342,7 @@ class SensorActivity : ComponentActivity() {
         } else if (!permissionRequested) {
             logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
             permissionRequested = true
+            permissionGeneration = collectionGeneration
             heartRatePermissionLauncher.launch(permission)
         } else {
             logHeartRateStatus(SensorStatus.PERMISSION_REQUIRED)
@@ -292,14 +350,16 @@ class SensorActivity : ComponentActivity() {
     }
 
     private fun startHeartRateCollection() {
-        if (!pageStarted || !collecting) return
+        if (!pageStarted || !collecting || activePageOwner !== pageOwner) return
         val token = collectionGeneration
 
         heartRateSource.start(
             onRecord = { record ->
-                if (!pageStarted || !collecting || token != collectionGeneration) return@start
+                if (!pageStarted || !collecting || token != collectionGeneration || activePageOwner !== pageOwner) return@start
                 if (record.timestampNanos < sessionController.state.transitions.first().watchElapsedTimeNanos) return@start
                 batcher.add(record)
+                lastHeartRateAt = SystemClock.elapsedRealtime()
+                heartRateStatus = SensorStatus.ACTIVE
                 heartRateText = String.format(Locale.US, "%.0f bpm", record.bpm)
                 Log.d(
                     "HeartRateCheck",
@@ -310,7 +370,7 @@ class SensorActivity : ComponentActivity() {
                 )
             },
             onStatusChanged = { status ->
-                if (token == collectionGeneration && collecting) logHeartRateStatus(status)
+                if (token == collectionGeneration && collecting && activePageOwner === pageOwner) logHeartRateStatus(status)
             }
         )
     }
