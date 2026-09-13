@@ -198,12 +198,12 @@ class SensorActivity : ComponentActivity() {
                     )
 
                     Text(
-                        text = "Heart rate · ${selectedSource.name}: $heartRateText",
+                        text = "Heart rate · ${selectedSource.name}: ${sensorValue(heartRateText, heartRateStatus)}",
                         color = Color.White,
                         fontSize = 16.sp
                     )
                     Text(
-                        text = "Acceleration (m/s²)\n$accelerationText",
+                        text = "Acceleration (m/s²)\n${sensorValue(accelerationText, accelerationStatus)}",
                         color = Color.White,
                         fontSize = 14.sp
                     )
@@ -409,6 +409,10 @@ class SensorActivity : ComponentActivity() {
             }
         )
     }
+
+    private fun sensorValue(value: String, status: SensorStatus): String =
+        if (status == SensorStatus.ACTIVE) value
+        else "— (${status.name.lowercase().replace('_', ' ')})"
 
     private fun logHeartRateStatus(status: SensorStatus) {
         heartRateStatus = status

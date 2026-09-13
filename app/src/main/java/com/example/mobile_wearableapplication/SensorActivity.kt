@@ -8,7 +8,6 @@ import android.os.Looper
 import android.os.SystemClock
 import java.util.Locale
 import com.example.mobile_wearableapplication.communication.ReceivedSensorStore
-import com.example.mobile_wearableapplication.communication.ReceivedSessionSnapshot
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -167,8 +166,9 @@ class SensorActivity : ComponentActivity() {
     }
     private fun refreshDiagnostics() {
         transferText = pendingTransferText
-        val snapshot = ReceivedSensorStore.snapshot()
-        val reception = ReceivedSensorStore.receptionDiagnostics()
+        val display = SensorDisplayData.read()
+        val snapshot = display.session
+        val reception = display.reception
         sessionText = snapshot?.let { "Session: ${it.sessionId}\nWatch: ${it.nodeId}" }
             ?: "No session received"
         val lastInterruption = reception.interruptions.lastOrNull()
@@ -178,9 +178,9 @@ class SensorActivity : ComponentActivity() {
                 val duration = ((it.endedAtMillis ?: SystemClock.elapsedRealtime()) - it.startedAtMillis) / 1000
                 "\nLast interruption: ${duration}s — ${it.reason}\nContinuity unknown; no offline replay."
             } ?: "")
-        accelerationPreview = formatStream(snapshot, WireDataType.ACCELEROMETER)
-        heartRatePreview = formatStream(snapshot, WireDataType.HEART_RATE)
-        val processing = ReceivedSensorStore.processingSnapshot()
+        accelerationPreview = formatStream(display, WireDataType.ACCELEROMETER)
+        heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
+        val processing = display.processing
         val preprocessing = processing.preprocessing
         fun windowText(window: com.example.mobile_wearableapplication.processing.CoveredWindow?): String {
             if (window == null) return "— (waiting for data)"
@@ -195,7 +195,11 @@ class SensorActivity : ComponentActivity() {
             "Intensity: ${intensityText(processing.intensity)}\n" +
             "Zone duration: ${zoneDurationText(processing.zoneDurations)}\n" +
             "Workout Recovery: ${recoveryText(processing.recovery, processing.recoveryRemainingSeconds)}\n" +
-            "Workout state: ${metricStatus(processing.workoutState)}\n" +
+            "Workout state: ${when (val state = processing.workoutState) {
+                is MetricResult.Available -> "${state.value.phase} · ${reception.sessionLifecycle}" +
+                    (if (!reception.ready) " (last confirmed)" else "")
+                is MetricResult.Unavailable -> metricStatus(state)
+            }}\n" +
             "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
             "Motion: ${processing.motion.state}\n" +
             "stillnessVerified: ${processing.quality.stillnessVerified ?: "Unknown"}; motionDetected: ${processing.quality.motionDetected ?: "Unknown"}\n" +
@@ -207,14 +211,26 @@ class SensorActivity : ComponentActivity() {
             "Acceleration 1s coverage: ${preprocessing.acceleration1s?.let { String.format(Locale.US, "%.0f%%", it.coverageFraction * 100) } ?: "—"}\n" +
             "HR quality: ${preprocessing.heartRateStats}\n" +
             "Acceleration quality: ${preprocessing.accelerationStats}\n" +
-            "Hold limits: HR 3s / acceleration 0.2s. Windows do not advance without new watch data."
+            "Hold limits: HR 3s / acceleration 0.2s. Windows do not advance without new watch data.\n\n" +
+            "Chart data: raw HR ${display.charts.heartRate.size}; RMS ${display.charts.rms.size}; " +
+            "gaps ${display.charts.gaps.size}; phases ${display.charts.phases.size}\n" +
+            "Current summary: ${summaryText(display.currentSummary)}\n" +
+            "Last completed summary (this app run): ${summaryText(display.lastSummary)}"
     }
+
+    private fun summaryText(summary: com.example.mobile_wearableapplication.processing.SessionSummary?): String =
+        summary?.let {
+            "${it.session.sessionId}\nBaseline: ${metricStatus(it.restingHeartRate)}\n" +
+                "Exercise HR: ${exerciseHeartRateText(it.exerciseHeartRate)}\n" +
+                "Recovery: ${recoveryText(it.recovery, null)}"
+        } ?: "— (no completed session)"
 
     private fun exerciseHeartRateText(result: com.example.mobile_wearableapplication.processing.MetricResult<com.example.mobile_wearableapplication.processing.ExerciseHeartRate>): String =
         when (result) {
             is MetricResult.Unavailable -> metricStatus(result)
             is MetricResult.Available -> {
-                fun bpm(value: Double?) = value?.let { "%.1f bpm".format(it) } ?: "—"
+                fun bpm(value: Double?) = value?.let { "%.1f bpm".format(it) }
+                    ?: "— (outside exercise or insufficient fresh data)"
                 "\nCurrent (3s): ${bpm(result.value.currentBpm)}\nAverage: ${bpm(result.value.timeWeightedAverageBpm)}\nPeak (smoothed): ${bpm(result.value.smoothedPeakBpm)}"
             }
         }
@@ -253,24 +269,18 @@ class SensorActivity : ComponentActivity() {
         is MetricResult.Unavailable -> "— (${result.reason.name.lowercase().replace('_', ' ')})"
     }
 
-    private fun formatStream(snapshot: ReceivedSessionSnapshot?, type: WireDataType): String {
+    private fun formatStream(display: SensorDisplayData, type: WireDataType): String {
         val title = if (type == WireDataType.ACCELEROMETER) "Acceleration" else "Heart rate"
-        val stream = snapshot?.streams?.get(type) ?: return "$title: waiting for data"
-        val received = stream.latest ?: return "$title: waiting for data"
+        val reason = display.unavailableReason(type)
+        val stream = display.session?.streams?.get(type) ?: return "$title: — ($reason)"
+        val received = stream.latest ?: return "$title: — ($reason)"
         val sample = received.sample
-        val ageMillis = (SystemClock.elapsedRealtime() -
+        val ageMillis = (display.readAtMillis -
             checkNotNull(stream.lastNewSampleAtMillis)).coerceAtLeast(0L)
-        val reception = ReceivedSensorStore.receptionDiagnostics()
-        val freshness = when {
-            !reception.ready -> "Historical / awaiting session confirmation"
-            reception.sessionLifecycle != SessionLifecycle.RUNNING -> "Historical / collection ended"
-            !stream.freshSinceResume -> "Historical / waiting for new sample"
-            ageMillis >= ReceivedSensorStore.STALE_AFTER_MILLIS -> "Stale"
-            else -> "Recent"
-        }
-        val value = if (type == WireDataType.ACCELEROMETER) {
+        val freshness = reason ?: "Recent"
+        val value = if (reason != null) "— ($reason)" else if (type == WireDataType.ACCELEROMETER) {
             String.format(Locale.US, "X: %.3f  Y: %.3f  Z: %.3f m/s^2", sample.x, sample.y, sample.z)
-        } else String.format(Locale.US, "%.1f bpm", sample.bpm)
+        } else String.format(Locale.US, "%.1f bpm", display.currentHeartRateBpm)
         val capacity = if (type == WireDataType.ACCELEROMETER) {
             ReceivedSensorStore.ACCELERATION_CAPACITY
         } else ReceivedSensorStore.HEART_RATE_CAPACITY
