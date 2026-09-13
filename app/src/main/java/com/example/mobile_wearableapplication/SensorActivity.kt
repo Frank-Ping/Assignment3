@@ -46,6 +46,7 @@ import com.example.mobile_wearableapplication.communication.ConnectionStatus
 import com.example.mobile_wearableapplication.communication.DeviceRole
 import com.example.mobile_wearableapplication.communication.WearConnectionManager
 import com.example.mobile_wearableapplication.processing.MetricResult
+import com.example.mobile_wearableapplication.processing.ProcessingSnapshot
 
 class SensorActivity : ComponentActivity() {
     private lateinit var sessionClient: PhoneSessionClient
@@ -68,6 +69,10 @@ class SensorActivity : ComponentActivity() {
         }
     }
     private var overview by mutableStateOf<Map<String, String>>(emptyMap())
+    private var chartNowMillis by mutableStateOf(System.currentTimeMillis())
+    private var chartEpochOffsetMillis by mutableStateOf<Long?>(null)
+    private var chartSession: com.example.mobile_wearableapplication.processing.ProcessingSession? = null
+    private var chartProcessing by mutableStateOf(ProcessingSnapshot())
     private var pendingTransferText = "No batch received"
     private var sessionText by mutableStateOf("No session received")
     private var processingText by mutableStateOf("Processing: no session")
@@ -132,6 +137,9 @@ class SensorActivity : ComponentActivity() {
                     sessionText = sessionText,
                     processingText = processingText,
                     overview = overview,
+                    chartProcessing = chartProcessing,
+                    chartNowMillis = chartNowMillis,
+                    chartEpochOffsetMillis = chartEpochOffsetMillis,
                     controls = controls,
                     onAction = { sessionClient.command(it) },
                     onSourceToggle = { sessionClient.toggleHeartRateSource() },
@@ -189,6 +197,19 @@ class SensorActivity : ComponentActivity() {
         accelerationPreview = formatStream(display, WireDataType.ACCELEROMETER)
         heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
         val processing = display.processing
+        chartNowMillis = System.currentTimeMillis()
+        if (chartSession != processing.session) {
+            chartSession = processing.session
+            chartEpochOffsetMillis = null
+        }
+        if (chartEpochOffsetMillis == null) {
+            snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.let { received ->
+                // Approximate wall-clock anchor from phone receipt, not clock synchronization.
+                chartEpochOffsetMillis = chartNowMillis -
+                    (SystemClock.elapsedRealtime() - received.receivedAtMillis) - received.sample.timestampNanos / 1_000_000L
+            }
+        }
+        chartProcessing = processing
         val preprocessing = processing.preprocessing
         val exercise = (processing.exerciseHeartRate as? MetricResult.Available)?.value
         val intensity = (processing.intensity as? MetricResult.Available)?.value
@@ -363,6 +384,9 @@ private fun SensorPage(
     sessionText: String = "No session received",
     processingText: String = "Processing: no session",
     overview: Map<String, String> = emptyMap(),
+    chartProcessing: ProcessingSnapshot = ProcessingSnapshot(),
+    chartNowMillis: Long = System.currentTimeMillis(),
+    chartEpochOffsetMillis: Long? = null,
     controls: SessionControlUi = SessionControlUi(),
     onAction: (SessionAction) -> Unit = {},
     onSourceToggle: () -> Unit = {},
@@ -458,10 +482,12 @@ private fun SensorPage(
                     }
                 }
                 Text(if (intensityTab) "Exercise intensity history" else "Raw heart rate history", color = Color.White)
-                Column(Modifier.fillMaxWidth().heightIn(min = 160.dp), verticalArrangement = Arrangement.Center) {
-                    Text(value(if (intensityTab) "zoneChart" else "hrChart"), color = Color.LightGray)
-                    Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
-                }
+                if (intensityTab) {
+                    Column(Modifier.fillMaxWidth().heightIn(min = 160.dp), verticalArrangement = Arrangement.Center) {
+                        Text(value("zoneChart"), color = Color.LightGray)
+                        Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
+                    }
+                } else HeartRateChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
             }
             TextButton(onClick = { controlsExpanded = !controlsExpanded }) {
                 Text(if (controlsExpanded) "Hide session controls" else "Session controls", color = cyan)
