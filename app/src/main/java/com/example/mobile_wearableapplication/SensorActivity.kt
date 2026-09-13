@@ -11,6 +11,11 @@ import com.example.mobile_wearableapplication.communication.ReceivedSensorStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +67,7 @@ class SensorActivity : ComponentActivity() {
             refreshHandler.postDelayed(this, 1_000L)
         }
     }
+    private var overview by mutableStateOf<Map<String, String>>(emptyMap())
     private var pendingTransferText = "No batch received"
     private var sessionText by mutableStateOf("No session received")
     private var processingText by mutableStateOf("Processing: no session")
@@ -125,6 +131,7 @@ class SensorActivity : ComponentActivity() {
                     heartRatePreview = heartRatePreview,
                     sessionText = sessionText,
                     processingText = processingText,
+                    overview = overview,
                     controls = controls,
                     onAction = { sessionClient.command(it) },
                     onSync = { sessionClient.sync() }
@@ -182,6 +189,26 @@ class SensorActivity : ComponentActivity() {
         heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
         val processing = display.processing
         val preprocessing = processing.preprocessing
+        overview = mapOf(
+            "current" to (display.currentHeartRateBpm?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
+            "source" to (snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.source?.name ?: "—"),
+            "freshness" to (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
+            "intensity" to intensityText(processing.intensity),
+            "exercise" to exerciseHeartRateText(processing.exerciseHeartRate),
+            "baseline" to (metricStatus(processing.restingHeartRate) +
+                if (processing.restingHeartRate is MetricResult.Available) " bpm" else ""),
+            "recovery" to when (val result = processing.recovery) {
+                is MetricResult.Available -> String.format(Locale.US, "%.1f bpm/min", result.value.bpmPerMinute)
+                is MetricResult.Unavailable -> metricStatus(result)
+            },
+            "details" to recoveryText(processing.recovery, processing.recoveryRemainingSeconds),
+            "summary" to summaryText(display.currentSummary),
+            "previous" to summaryText(display.lastSummary),
+            "hrChart" to "${display.charts.heartRate.size} raw samples · ${display.charts.gaps.count { it.stream == "HR" }} gaps",
+            "zoneChart" to zoneDurationText(display.charts.zoneDurations),
+            "rms" to "${metricStatus(processing.accelerationRms)} · ${processing.motion.state}\n${display.charts.rms.size} points"
+        )
+
         fun windowText(window: com.example.mobile_wearableapplication.processing.CoveredWindow?): String {
             if (window == null) return "— (waiting for data)"
             val mean = window.mean?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
@@ -302,75 +329,118 @@ private fun SensorPage(
     heartRatePreview: String = "Heart rate: --",
     sessionText: String = "No session received",
     processingText: String = "Processing: no session",
+    overview: Map<String, String> = emptyMap(),
     controls: SessionControlUi = SessionControlUi(),
     onAction: (SessionAction) -> Unit = {},
     onSync: () -> Unit = {}
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                verticalGradient(
-                    colors = listOf(
-                        Color(0xFF000000),
-                        Color(0xFF303030)
-                    )
-                )
-            )
-            .safeDrawingPadding()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 28.dp, vertical = 50.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(
-                space = 24.dp,
-                alignment = Alignment.CenterVertically
-            )
-        ) {
-            Text(
-                text = "Sensor Data",
-                color = Color.White,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-
-            Text(
-                text = connectionText,
-                color = Color.LightGray,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Text("${if (controls.synchronized) "" else "Last confirmed: "}${controls.state?.phase?.label ?: "Unknown"} · ${controls.state?.lifecycle ?: "Unknown"}", color = Color.White)
-            Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
-            controls.state?.let { state ->
-                Text("Revision: ${state.revision}\nWatch phase time: ${state.transitions.lastOrNull()?.watchElapsedTimeNanos ?: "—"} ns",
-                    color = Color.Gray, fontSize = 12.sp)
+    var intensityTab by rememberSaveable { mutableStateOf(false) }
+    var diagnosticsExpanded by rememberSaveable { mutableStateOf(false) }
+    val cyan = Color(0xFF00DDE7)
+    val coral = Color(0xFFFF7973)
+    fun value(key: String) = overview[key] ?: "— (waiting for data)"
+    Box(Modifier.fillMaxSize().background(verticalGradient(listOf(
+        Color(0xFF10191D), Color(0xFF1B3036), Color(0xFF101519)
+    ))).safeDrawingPadding()) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack) { Text("‹", color = Color.White, fontSize = 30.sp) }
+                Text("Sensor Data", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
             }
-            SessionAction.entries.forEach { action ->
-                Button(onClick = { onAction(action) }, enabled = controls.synchronized && !controls.pending && controls.state?.allows(action) == true) {
-                    Text(action.label)
+            DisplayCard {
+                Text(connectionText, color = Color.White)
+                Text("HR · ${value("source")}  |  ${value("freshness")}", color = cyan, fontSize = 12.sp)
+            }
+            DisplayCard {
+                Text("Workout state", color = Color.LightGray, fontSize = 12.sp)
+                Text("${if (controls.synchronized) "" else "Last confirmed: "}${controls.state?.phase?.label ?: "—"} · ${controls.state?.lifecycle ?: "No session"}", color = Color.White)
+                Text("Exercise intensity · ${value("intensity")}", color = cyan, fontSize = 13.sp)
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("♥", color = coral, fontSize = 48.sp)
+                Column {
+                    Text("Current heart rate", color = Color.White, fontSize = 16.sp)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(overview["current"] ?: "—", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
+                        Text(" bpm", color = Color.LightGray, fontSize = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
+                    }
                 }
             }
-            Button(onClick = onSync, enabled = controls.connected && !controls.pending) { Text("Sync state") }
-
-            Text(accelerationPreview, color = Color.White, fontSize = 14.sp)
-            Text(heartRatePreview, color = Color.White, fontSize = 14.sp)
-            Text(processingText, color = Color.LightGray, fontSize = 12.sp)
-            Text(transferText, color = Color.LightGray, fontSize = 12.sp)
-            Text(
-                text = "$sessionText\nRolling history in memory; receiving while this page is active.\nRecent/Stale describes receipt time, not measurement accuracy.",
-                modifier = Modifier.padding(bottom = 8.dp),
-                color = Color.Gray,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
-            )
-
+            DisplayCard {
+                Text("Exercise heart rate", color = Color.White, fontWeight = FontWeight.Medium)
+                Text(value("exercise").trim(), color = Color.LightGray, fontSize = 14.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DisplayCard(Modifier.weight(1f)) {
+                    Text("Session resting heart rate", color = coral, fontSize = 14.sp)
+                    Text(value("baseline"), color = Color.White, fontSize = 18.sp)
+                }
+                DisplayCard(Modifier.weight(1f)) {
+                    Text("Workout Recovery Rate", color = coral, fontSize = 14.sp)
+                    Text(value("recovery"), color = Color.White, fontSize = 18.sp)
+                }
+            }
+            DisplayCard {
+                Text("Session controls", color = Color.White)
+                Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
+                SessionAction.entries.forEach { action ->
+                    Button(onClick = { onAction(action) }, modifier = Modifier.fillMaxWidth(),
+                        enabled = controls.synchronized && !controls.pending && controls.state?.allows(action) == true) {
+                        Text(action.label)
+                    }
+                }
+                TextButton(onClick = onSync, enabled = controls.connected && !controls.pending) { Text("Sync state") }
+            }
+            DisplayCard {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("Heart rate history", "Intensity history").forEachIndexed { index, title ->
+                        val selected = intensityTab == (index == 1)
+                        TextButton(onClick = { intensityTab = index == 1 },
+                            modifier = Modifier.weight(1f).background(if (selected) cyan else Color.Transparent, RoundedCornerShape(10.dp))) {
+                            Text(title, color = if (selected) Color.Black else Color.White, fontSize = 12.sp)
+                        }
+                    }
+                }
+                Text(if (intensityTab) "Exercise intensity history" else "Raw heart rate history", color = Color.White)
+                Column(Modifier.fillMaxWidth().heightIn(min = 160.dp), verticalArrangement = Arrangement.Center) {
+                    Text(value(if (intensityTab) "zoneChart" else "hrChart"), color = Color.LightGray)
+                    Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
+                }
+            }
+            DisplayCard {
+                Text("Movement RMS · m/s²", color = Color.White)
+                Column(Modifier.heightIn(min = 100.dp), verticalArrangement = Arrangement.Center) {
+                    Text(value("rms"), color = Color.LightGray)
+                    Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
+                }
+            }
+            DisplayCard {
+                Text("Recovery details / Session summary", color = Color.White)
+                Text(value("details"), color = Color.LightGray, fontSize = 13.sp)
+                Text("Current summary\n${value("summary")}\n\nLast completed (this app run)\n${value("previous")}", color = Color.LightGray, fontSize = 13.sp)
+            }
+            DisplayCard {
+                TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
+                    Text(if (diagnosticsExpanded) "Hide diagnostics" else "Show diagnostics", color = cyan)
+                }
+                if (diagnosticsExpanded) {
+                    Text("$accelerationPreview\n\n$heartRatePreview\n\n$processingText\n\n$transferText\n\n$sessionText",
+                        color = Color.LightGray, fontSize = 12.sp)
+                    Text("Rolling history in memory; receiving while this page is active. Recent/Stale describes receipt time, not measurement accuracy.", color = Color.Gray, fontSize = 12.sp)
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun DisplayCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), color = Color(0xD91B252B)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
     }
 }
 
