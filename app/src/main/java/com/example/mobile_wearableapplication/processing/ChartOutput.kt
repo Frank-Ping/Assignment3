@@ -8,7 +8,8 @@ data class ChartOutput(
     val rms: List<ChartPoint> = emptyList(),
     val gaps: List<DataGap> = emptyList(),
     val phases: List<ConfirmedPhaseEvent> = emptyList(),
-    val zoneDurations: ZoneDurations? = null
+    val zoneDurations: ZoneDurations? = null,
+    val zoneIntervals: List<ZoneInterval> = emptyList()
 )
 data class SessionSummary(
     val session: ProcessingSession, val endedAtNanos: Long,
@@ -41,7 +42,8 @@ class ChartBuffer {
         val value=sample.bpm.takeIf { it.isFinite() && it > 0 }
         hr.addLast(ChartPoint(sample.timestampNanos,value,sample.source))
         if(value == null) gap("HR",sample.timestampNanos,sample.timestampNanos,"Invalid value")
-        while(hr.size > 600) hr.removeFirst()
+        while(hr.size > 43_201 || (hr.isNotEmpty() &&
+            hr.first().timestampNanos < sample.timestampNanos - 43_200_000_000_000L)) hr.removeFirst()
     }
     fun acceleration(sample: AccelerationInput, result: MotionResult) {
         if(lastAcceleration?.let { sample.timestampNanos <= it } == true) return
@@ -54,7 +56,8 @@ class ChartBuffer {
         val point=ChartPoint(sample.timestampNanos,value,sample.source)
         if(lastRmsBucket == bucket && rms.isNotEmpty()) rms.removeLast()
         rms.addLast(point); lastRmsBucket=bucket
-        while(rms.size > 600) rms.removeFirst()
+        while(rms.size > 43_201 || (rms.isNotEmpty() &&
+            rms.first().timestampNanos < sample.timestampNanos - 43_200_000_000_000L)) rms.removeFirst()
     }
     fun interrupted(stream: String, time: Long) {
         if(gaps.none { it.stream == stream && it.endNanos == null }) gap(stream,time,null,"Reception unavailable")

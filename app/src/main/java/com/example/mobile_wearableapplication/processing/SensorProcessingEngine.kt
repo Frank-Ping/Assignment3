@@ -166,7 +166,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             finalSummary = SessionSummary(session,ended,published.restingHeartRate,published.exerciseHeartRate,
                 published.recovery,published.zoneDurations,state.phaseHistory.toList())
         }
-        published = published.copy(chartOutput = chartBuffer.snapshot(state.phaseHistory,published.zoneDurations), finalSummary = finalSummary)
+        published = published.copy(chartOutput = chartBuffer.snapshot(state.phaseHistory,published.zoneDurations).copy(zoneIntervals = zoneDurationCalculator.intervals()), finalSummary = finalSummary)
     }
 
     @Synchronized

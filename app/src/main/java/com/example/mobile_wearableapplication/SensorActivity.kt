@@ -70,6 +70,7 @@ class SensorActivity : ComponentActivity() {
     }
     private var overview by mutableStateOf<Map<String, String>>(emptyMap())
     private var chartNowMillis by mutableStateOf(System.currentTimeMillis())
+    private var historyPreview by mutableStateOf<HistoryPreview?>(null)
     private var chartEpochOffsetMillis by mutableStateOf<Long?>(null)
     private var chartSession: com.example.mobile_wearableapplication.processing.ProcessingSession? = null
     private var chartProcessing by mutableStateOf(ProcessingSnapshot())
@@ -137,9 +138,10 @@ class SensorActivity : ComponentActivity() {
                     sessionText = sessionText,
                     processingText = processingText,
                     overview = overview,
-                    chartProcessing = chartProcessing,
+                    chartProcessing = historyPreview?.processing ?: chartProcessing,
                     chartNowMillis = chartNowMillis,
-                    chartEpochOffsetMillis = chartEpochOffsetMillis,
+                    chartEpochOffsetMillis = historyPreview?.epochOffsetMillis ?: chartEpochOffsetMillis,
+                    showingHistoryPreview = historyPreview != null,
                     controls = controls,
                     onAction = { sessionClient.command(it) },
                     onSourceToggle = { sessionClient.toggleHeartRateSource() },
@@ -198,12 +200,14 @@ class SensorActivity : ComponentActivity() {
         heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
         val processing = display.processing
         chartNowMillis = System.currentTimeMillis()
+        historyPreview = HistoryPreviewStore.value
         if (chartSession != processing.session) {
             chartSession = processing.session
             chartEpochOffsetMillis = null
         }
         if (chartEpochOffsetMillis == null) {
-            snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.let { received ->
+            (snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest
+                ?: snapshot?.streams?.get(WireDataType.ACCELEROMETER)?.latest)?.let { received ->
                 // Approximate wall-clock anchor from phone receipt, not clock synchronization.
                 chartEpochOffsetMillis = chartNowMillis -
                     (SystemClock.elapsedRealtime() - received.receivedAtMillis) - received.sample.timestampNanos / 1_000_000L
@@ -222,10 +226,16 @@ class SensorActivity : ComponentActivity() {
             else -> "3-second smoothed HR"
         }
         fun bpm(value: Double?) = value?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
+        val injectedHr = HistoryPreviewStore.heartRate
+        val injectedFresh = injectedHr != null && SystemClock.elapsedRealtime() - injectedHr.receivedAtMillis <= 3_000L
         overview = mapOf(
-            "current" to (display.currentHeartRateBpm?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
+            "current" to ((if (injectedHr != null) injectedHr.bpm.takeIf { injectedFresh }
+                else display.currentHeartRateBpm)?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
+            "currentLabel" to if (injectedHr != null) "ADB DEMO · display only" else "Raw HR",
             "source" to (snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.source?.name ?: "—"),
-            "freshness" to (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
+            "freshness" to if (injectedHr != null) {
+                if (injectedFresh) "Recent" else "Stale · send another ADB reading or clear preview"
+            } else (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
             "intensity" to intensityText(processing.intensity),
             "exercise" to exerciseHeartRateText(processing.exerciseHeartRate),
             "exerciseCurrent" to bpm(exercise?.currentBpm.takeIf {
@@ -387,6 +397,7 @@ private fun SensorPage(
     chartProcessing: ProcessingSnapshot = ProcessingSnapshot(),
     chartNowMillis: Long = System.currentTimeMillis(),
     chartEpochOffsetMillis: Long? = null,
+    showingHistoryPreview: Boolean = false,
     controls: SessionControlUi = SessionControlUi(),
     onAction: (SessionAction) -> Unit = {},
     onSourceToggle: () -> Unit = {},
@@ -452,7 +463,7 @@ private fun SensorPage(
                 Text("♥", color = coral, fontSize = 48.sp)
                 Column {
                     Text("Current heart rate", color = Color.White, fontSize = 16.sp)
-                    Text("Raw HR · ${value("freshness")}", color = Color.LightGray, fontSize = 12.sp)
+                    Text("${overview["currentLabel"] ?: "Raw HR"} · ${value("freshness")}", color = Color.LightGray, fontSize = 12.sp)
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(overview["current"] ?: "—", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
                         Text(" bpm", color = Color.LightGray, fontSize = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
@@ -481,13 +492,16 @@ private fun SensorPage(
                         }
                     }
                 }
-                Text(if (intensityTab) "Exercise intensity history" else "Raw heart rate history", color = Color.White)
+                if (showingHistoryPreview)
+                    Text("DEMO HISTORY · all three charts use synthetic data; live cards are unchanged", color = coral, fontSize = 12.sp)
+                Text(if (intensityTab) "Hourly exercise intensity" else "Hourly heart rate", color = Color.White)
                 if (intensityTab) {
-                    Column(Modifier.fillMaxWidth().heightIn(min = 160.dp), verticalArrangement = Arrangement.Center) {
-                        Text(value("zoneChart"), color = Color.LightGray)
-                        Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
-                    }
+                    IntensityChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
                 } else HeartRateChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
+            }
+            DisplayCard {
+                Text("Movement RMS · m/s²", color = Color.White)
+                MovementChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
             }
             TextButton(onClick = { controlsExpanded = !controlsExpanded }) {
                 Text(if (controlsExpanded) "Hide session controls" else "Session controls", color = cyan)
@@ -526,13 +540,6 @@ private fun SensorPage(
                 }
                 Text("Current: ${value("exerciseCurrentReason")}", color = Color.LightGray, fontSize = 12.sp)
                 Text(value("exerciseStatistics"), color = Color.LightGray, fontSize = 12.sp)
-            }
-            DisplayCard {
-                Text("Movement RMS · m/s²", color = Color.White)
-                Column(Modifier.heightIn(min = 100.dp), verticalArrangement = Arrangement.Center) {
-                    Text(value("rms"), color = Color.LightGray)
-                    Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
-                }
             }
             DisplayCard {
                 Text("Recovery details / Session summary", color = Color.White)
