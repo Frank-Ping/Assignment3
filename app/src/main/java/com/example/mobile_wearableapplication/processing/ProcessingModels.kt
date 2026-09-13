@@ -66,6 +66,8 @@ data class ProcessingSnapshot(
     val endedAtNanos: Long? = null,
     val recoveryRemainingSeconds: Long? = null,
     val zoneDurations: ZoneDurations? = null,
+    val chartOutput: ChartOutput = ChartOutput(),
+    val finalSummary: SessionSummary? = null,
     val acceleration: InputSummary = InputSummary(),
     val heartRate: InputSummary = InputSummary(),
     val restingHeartRate: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),

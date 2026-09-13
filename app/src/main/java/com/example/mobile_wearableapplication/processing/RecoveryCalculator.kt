@@ -2,6 +2,8 @@ package com.example.mobile_wearableapplication.processing
 
 /** Raw HR endpoint medians; intervals are half-open and use watch nanoseconds. */
 class RecoveryCalculator {
+    private var recoveryStart: Long? = null
+    private var finalResult: MetricResult<RecoveryRate>? = null
     private val samples = mutableListOf<HeartRateInput>()
     private data class MotionObservation(val time: Long, val moving: Boolean?)
     private val motion = mutableListOf<MotionObservation>()
@@ -11,11 +13,21 @@ class RecoveryCalculator {
     fun accept(sample: HeartRateInput) {
         if (sample.sequence <= 0 || sample.timestampNanos < 0 || samples.lastOrNull()?.let {
                 sample.sequence <= it.sequence || sample.timestampNanos <= it.timestampNanos } == true) return
+        if (finalResult != null || recoveryStart?.let { sample.timestampNanos >= it + 60_000_000_000L } == true) return
         samples.add(sample)
+        val retainFrom = recoveryStart?.minus(5_000_000_000L) ?: (sample.timestampNanos - 65_000_000_000L)
+        while (samples.size > 600 || (samples.size > 1 && samples.first().timestampNanos < retainFrom)) samples.removeAt(0)
+        val oldest = samples.firstOrNull()?.sequence ?: sample.sequence
+        interruptedAfter.removeAll { it < oldest }
     }
     fun observe(time: Long, moving: Boolean?) {
         if (motion.lastOrNull()?.let { time <= it.time } == true) return
+        if (finalResult != null || recoveryStart?.let { time > it + 60_000_000_000L } == true) return
         motion.add(MotionObservation(time, moving))
+        val retainFrom = recoveryStart ?: (time - 65_000_000_000L)
+        while (motion.size > 2000 || (motion.size > 2 && motion[1].time < retainFrom)) motion.removeAt(0)
+        val oldest = motion.firstOrNull()?.time ?: time
+        brokenMotion.removeAll { it < oldest }
     }
     fun interrupt() { samples.lastOrNull()?.let { interruptedAfter.add(it.sequence) } }
     fun moved(t0: Long?, now: Long? = null): Boolean? {
@@ -55,9 +67,11 @@ class RecoveryCalculator {
     }
     fun result(t0: Long?, exerciseStart: Long?, now: Long?, ended: Long?): MetricResult<RecoveryRate> {
         if (t0 == null) return MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
+        recoveryStart = t0
         val end = t0 + 60_000_000_000L
         if (moved(t0) == true) return MetricResult.Unavailable(UnavailableReason.INTERRUPTED_BY_MOVEMENT)
         if (ended != null && ended < end) return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
+        finalResult?.let { return it }
         if ((now ?: t0) < end) return MetricResult.Unavailable(UnavailableReason.COLLECTING_RECOVERY)
         if (moved(t0) == null) return MetricResult.Unavailable(UnavailableReason.RECOVERY_MOTION_UNKNOWN)
         if (exerciseStart == null || exerciseStart > t0 - 5_000_000_000L)
@@ -67,8 +81,10 @@ class RecoveryCalculator {
         if (h0 == null || h60 == null || first.coverageFraction!! < 0.8 || last.coverageFraction!! < 0.8)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val drop = h0 - h60
-        return MetricResult.Available(RecoveryRate(h0, h60, drop, drop, first, last),
+        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, drop, first, last),
             CalculationEvidence(CalculationWindow(t0-5_000_000_000L,end), first.sampleCount+last.sampleCount,
                 sources = first.sources+last.sources))
+        finalResult = result
+        return result
     }
 }

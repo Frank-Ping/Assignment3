@@ -184,6 +184,9 @@ object ReceivedSensorStore {
     fun processingSnapshot(): ProcessingSnapshot = processor.snapshot()
 
     @Synchronized
+    fun lastCompletedSummary() = processor.lastCompletedSummary()
+
+    @Synchronized
     fun checkReceptionTimeouts() {
         val lastReceipt = activeSession?.let { sessions[it] }?.get(WireDataType.ACCELEROMETER)?.lastNewSampleAtMillis
         // Receipt watchdog allows for the existing 500 ms batches; never subtract watch time here.

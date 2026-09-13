@@ -7,6 +7,9 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private val intensityClassifier = IntensityClassifier(hrMaxBpm)
     private var state = ProcessingSnapshot()
     private var published = state
+    private var chartBuffer = ChartBuffer()
+    private var finalSummary: SessionSummary? = null
+    private var previousSummary: SessionSummary? = null
     private var preprocessor = SensorPreprocessor()
     private var motionDetector = MotionDetector()
     private var restingCalculator = RestingHeartRateCalculator()
@@ -17,6 +20,9 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     @Synchronized
     fun startSession(session: ProcessingSession) {
         if (state.session == session) return
+        previousSummary = finalSummary ?: previousSummary
+        finalSummary = null
+        chartBuffer = ChartBuffer()
         intensityClassifier.reset()
         preprocessor = SensorPreprocessor()
         motionDetector = MotionDetector()
@@ -36,6 +42,9 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
 
     @Synchronized
     fun reset() {
+        previousSummary = finalSummary ?: previousSummary
+        finalSummary = null
+        chartBuffer = ChartBuffer()
         state = ProcessingSnapshot()
         intensityClassifier.reset()
         preprocessor = SensorPreprocessor()
@@ -53,6 +62,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         samples.forEach { preprocessor.accept(it) }
         samples.forEach {
             motionDetector.accept(it)
+            chartBuffer.acceleration(it, motionDetector.snapshot())
             recoveryCalculator.observe(it.timestampNanos, motionDetector.snapshot().motionDetected)
             restingCalculator.observe(it.timestampNanos, motionDetector.snapshot().stillnessVerified == true)
         }
@@ -67,6 +77,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         if (session != state.session || samples.isEmpty()) return
         samples.forEach {
             preprocessor.accept(it)
+            chartBuffer.heartRate(it)
             if (phaseAt(it.timestampNanos) == WorkoutPhase.EXERCISING) {
                 val smoothed = preprocessor.snapshot(state.exerciseStartedAt).heartRate3s?.mean
                 val confirmed = intensityClassifier.accept(it.timestampNanos, smoothed)
@@ -126,6 +137,9 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     @Synchronized
     fun snapshot(): ProcessingSnapshot = published
 
+    @Synchronized
+    fun lastCompletedSummary(): SessionSummary? = finalSummary ?: previousSummary
+
     /** Called only on processing events, never from a UI read. */
     private fun publish() {
         val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
@@ -146,10 +160,18 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
             heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
             accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
+        val session = state.session
+        val ended = state.endedAtNanos
+        if (session != null && ended != null && finalSummary == null) {
+            finalSummary = SessionSummary(session,ended,published.restingHeartRate,published.exerciseHeartRate,
+                published.recovery,published.zoneDurations,state.phaseHistory.toList())
+        }
+        published = published.copy(chartOutput = chartBuffer.snapshot(state.phaseHistory,published.zoneDurations), finalSummary = finalSummary)
     }
 
     @Synchronized
     fun markHeartRateUnavailable() {
+        preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("HR",it) }
         exerciseCalculator.markUnavailable()
         intensityClassifier.missing()
         preprocessor.snapshot().asOfWatchNanos?.let { zoneDurationCalculator.record(it, IntensityZone.MISSING) }
@@ -157,10 +179,10 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     }
 
     @Synchronized
-    fun breakContinuity() { markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
+    fun breakContinuity() { preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
 
     @Synchronized
-    fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
+    fun markAccelerationUnavailable() { preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; motionDetector.interrupt(); restingCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
 
     private fun markRecoveryMotionUnavailable() {
         val end = state.recoveryStartedAt?.plus(60_000_000_000L)
