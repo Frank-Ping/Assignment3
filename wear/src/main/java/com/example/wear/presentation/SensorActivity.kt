@@ -4,6 +4,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalDensity
+import com.example.wear.R
+import java.util.Date
 import com.example.wear.presentation.communication.SensorBatcher
 import com.example.wear.presentation.communication.SensorDataSender
 import android.os.Bundle
@@ -45,9 +58,10 @@ import com.example.wear.presentation.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
     private lateinit var sessionTransport: SessionTransport
-    private var phaseText by mutableStateOf("No session")
+    private var phaseText by mutableStateOf("Not Started")
+    private var clockText by mutableStateOf("")
     private var sessionMessage by mutableStateOf("Waiting for phone command")
-    private var collecting = false
+    private var collecting by mutableStateOf(false)
     private var collectionGeneration = 0
     private val pageOwner = Any()
     private val pageHandler = Handler(Looper.getMainLooper())
@@ -56,6 +70,7 @@ class SensorActivity : ComponentActivity() {
     private val freshnessTask = object : Runnable {
         override fun run() {
             if (!pageStarted || activePageOwner !== pageOwner) return
+            clockText = android.text.format.DateFormat.getTimeFormat(this@SensorActivity).format(Date())
             val now = SystemClock.elapsedRealtime()
             if (collecting) {
                 if (accelerationStatus == SensorStatus.ACTIVE && lastAccelerationAt?.let { now - it >= 3_000L } == true) {
@@ -80,9 +95,12 @@ class SensorActivity : ComponentActivity() {
 
     private fun showSession() {
         val state = sessionController.state
-        phaseText = "${state.phase?.label ?: "No session"} · ${state.lifecycle}\n" +
-            "Revision: ${state.revision}" +
-            (state.transitions.lastOrNull()?.let { "\nWatch phase time: ${it.watchElapsedTimeNanos} ns" } ?: "")
+        phaseText = when {
+            state.lifecycle != SessionLifecycle.RUNNING -> "Not Started"
+            state.phase == SessionPhase.EXERCISING -> "Exercising"
+            state.phase == SessionPhase.RECOVERING -> "Recovering"
+            else -> "Not Started"
+        }
     }
 
     private fun receiveSession(node: String, path: String, bytes: ByteArray) {
@@ -179,64 +197,98 @@ class SensorActivity : ComponentActivity() {
 
         setContent {
             MobileWearableApplicationTheme {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp, vertical = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(
-                        12.dp,
-                        Alignment.CenterVertically
-                    )
-                ) {
-                    Text(
-                        text = "Sensor Data",
-                        color = Color.White,
-                        fontSize = 20.sp
-                    )
-
-                    Text(
-                        text = "Heart rate · ${selectedSource.name}: ${sensorValue(heartRateText, heartRateStatus)}",
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
-                    Text(
-                        text = "Acceleration (m/s²)\n${sensorValue(accelerationText, accelerationStatus)}",
-                        color = Color.White,
-                        fontSize = 14.sp
-                    )
-                    Text(phaseText, color = Color.White, fontSize = 14.sp)
-                    Text(sessionMessage, color = Color.LightGray, fontSize = 12.sp)
-                    Text("Acceleration: $accelerationStatus", color = Color.LightGray, fontSize = 12.sp)
-                    Text("Heart rate: $heartRateStatus", color = Color.LightGray, fontSize = 12.sp)
-                    Text(
-                        "Source: ${selectedSource.name}${if (collecting) " (locked)" else " — tap to switch"}",
-                        color = Color.LightGray, fontSize = 12.sp,
-                        modifier = Modifier.clickable(enabled = !collecting) {
-                            if (!collecting) {
-                                selectedSource = if (selectedSource == HeartRateSourceType.REAL) HeartRateSourceType.DEMO else HeartRateSourceType.REAL
-                                heartRateText = "-- bpm"
-                                heartRateStatus = SensorStatus.NOT_STARTED
+                BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+                    val cardHeight = (maxHeight * 0.29f).coerceAtLeast(72.dp * LocalDensity.current.fontScale)
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                            .padding(top = (maxHeight * 0.025f).coerceAtLeast(4.dp), bottom = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Text(clockText, modifier = Modifier.fillMaxWidth(0.45f),
+                            color = Color.White, fontSize = 10.sp, lineHeight = 12.sp,
+                            fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center)
+                        Row(
+                            Modifier.border(1.dp, Color.Cyan, RoundedCornerShape(50))
+                                .padding(horizontal = 9.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            val phaseIcon = when (phaseText) {
+                                "Not Started" -> R.drawable.ic_not_started
+                                "Exercising" -> R.drawable.ic_exercising
+                                "Recovering" -> R.drawable.ic_recovering
+                                else -> null
+                            }
+                            phaseIcon?.let { Image(painterResource(it), null, Modifier.size(18.dp)) }
+                            Text(phaseText, color = Color.Cyan, fontSize = 9.sp, lineHeight = 11.sp,
+                                fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium)
+                        }
+                        SensorCard("Heart rate", R.drawable.ic_heart_filled, heartRateStatus,
+                            cardHeight, true) {
+                            Text(
+                                if (heartRateStatus == SensorStatus.ACTIVE) heartRateText else "— bpm",
+                                color = Color.White, fontSize = 18.sp, lineHeight = 22.sp,
+                                fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold
+                            )
+                            if (selectedSource == HeartRateSourceType.DEMO)
+                                Text("HR · DEMO", color = Color(0xFFFF8B80), fontSize = 8.sp, lineHeight = 10.sp)
+                        }
+                        SensorCard("Acceleration · m/s²", R.drawable.ic_acceleration, accelerationStatus,
+                            cardHeight, false) {
+                            Row(Modifier.fillMaxWidth(0.9f), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                val values = accelerationText.lines()
+                                listOf("X", "Y", "Z").forEachIndexed { index, axis ->
+                                    Column(
+                                        Modifier.weight(1f).border(0.5.dp, Color.DarkGray, RoundedCornerShape(4.dp))
+                                            .padding(vertical = 2.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(axis, color = Color.LightGray, fontSize = 8.sp, lineHeight = 10.sp)
+                                        Text(if (accelerationStatus == SensorStatus.ACTIVE)
+                                            values.getOrNull(index)?.substringAfter(": ") ?: "—" else "—",
+                                            color = Color.White, fontSize = 10.sp, lineHeight = 12.sp,
+                                            fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
                             }
                         }
-                    )
-                    if (selectedSource == HeartRateSourceType.DEMO) {
-                        Text("Demo: ${demoScenario.label}${if (collecting) " (locked)" else " — tap to change"}",
-                            color = Color.LightGray, fontSize = 12.sp,
-                            modifier = Modifier.clickable(enabled = !collecting) {
-                                if (!collecting) demoScenario = HeartRateDemoScenario.entries[
-                                    (demoScenario.ordinal + 1) % HeartRateDemoScenario.entries.size]
-                            })
+                        Row(Modifier.fillMaxWidth(0.66f).padding(top = 8.dp, bottom = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center) {
+                            if (peerNodeId != null) {
+                                Box(Modifier.size(6.dp).background(Color(0xFF00DD88), RoundedCornerShape(50)))
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Text(connectionText, color = Color.Gray, fontSize = 9.sp, lineHeight = 11.sp,
+                                textAlign = TextAlign.Center)
+                        }
+                        Column(Modifier.fillMaxWidth(0.72f).padding(top = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "Source: ${selectedSource.name}${if (collecting) " (locked)" else " · tap to switch"}",
+                                color = Color.LightGray, fontSize = 12.sp, lineHeight = 14.sp, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().clickable(enabled = !collecting) {
+                                    selectedSource = if (selectedSource == HeartRateSourceType.REAL)
+                                        HeartRateSourceType.DEMO else HeartRateSourceType.REAL
+                                    heartRateText = "-- bpm"
+                                    heartRateStatus = SensorStatus.NOT_STARTED
+                                }.padding(vertical = 14.dp)
+                            )
+                            if (selectedSource == HeartRateSourceType.DEMO) {
+                                Text("Demo: ${demoScenario.label}${if (collecting) " (locked)" else " · tap to change"}",
+                                    color = Color.LightGray, fontSize = 12.sp, lineHeight = 14.sp, textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().clickable(enabled = !collecting) {
+                                        demoScenario = HeartRateDemoScenario.entries[
+                                            (demoScenario.ordinal + 1) % HeartRateDemoScenario.entries.size]
+                                    }.padding(vertical = 14.dp))
+                            }
+                            // Protocol details stay below the glanceable sensor display.
+                            Text(skippedText, color = Color.Gray, fontSize = 10.sp, lineHeight = 12.sp, textAlign = TextAlign.Center)
+                            Text(transferText, color = Color.Gray, fontSize = 10.sp, lineHeight = 12.sp, textAlign = TextAlign.Center)
+                        }
                     }
-                    Text(skippedText, color = Color.LightGray, fontSize = 12.sp)
-                    Text(transferText, color = Color.LightGray, fontSize = 12.sp)
-                    Text(
-                        text = connectionText,
-                        color = Color.LightGray,
-                        fontSize = 12.sp
-                    )
                 }
             }
         }
@@ -410,9 +462,44 @@ class SensorActivity : ComponentActivity() {
         )
     }
 
-    private fun sensorValue(value: String, status: SensorStatus): String =
-        if (status == SensorStatus.ACTIVE) value
-        else "— (${status.name.lowercase().replace('_', ' ')})"
+    @Composable
+    private fun SensorCard(
+        title: String, icon: Int, status: SensorStatus, height: Dp,
+        upper: Boolean, content: @Composable ColumnScope.() -> Unit
+    ) {
+        val outerCorner = height / 2
+        val shape = RoundedCornerShape(
+            topStart = if (upper) outerCorner else 10.dp,
+            topEnd = if (upper) outerCorner else 10.dp,
+            bottomStart = if (upper) 10.dp else outerCorner,
+            bottomEnd = if (upper) 10.dp else outerCorner
+        )
+        Column(
+            Modifier.fillMaxWidth(0.84f).height(height)
+                .background(Color(0xFF0C1217), shape).border(1.dp, Color(0xFF485761), shape)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Image(painterResource(icon), null, Modifier.size(14.dp))
+                Text(title, color = Color.White, fontSize = 11.sp, lineHeight = 13.sp,
+                    fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium)
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (status == SensorStatus.ACTIVE) {
+                    Box(Modifier.size(6.dp).background(Color(0xFF00DD88), RoundedCornerShape(50)))
+                }
+                Text(status.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() },
+                    color = Color.LightGray,
+                    fontSize = 9.sp, lineHeight = 11.sp, textAlign = TextAlign.Center)
+            }
+        }
+    }
 
     private fun logHeartRateStatus(status: SensorStatus) {
         heartRateStatus = status
