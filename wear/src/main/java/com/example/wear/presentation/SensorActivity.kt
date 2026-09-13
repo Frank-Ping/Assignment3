@@ -26,6 +26,9 @@ import java.util.Locale
 import com.example.wear.presentation.data.SensorStatus
 import com.example.wear.presentation.sensors.HeartRateSource
 import com.example.wear.presentation.sensors.HealthServicesHeartRateSource
+import com.example.wear.presentation.communication.ConnectionStatus
+import com.example.wear.presentation.communication.DeviceRole
+import com.example.wear.presentation.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
 
@@ -34,6 +37,10 @@ class SensorActivity : ComponentActivity() {
     private var lastLoggedStatus: String? = null
 
     private lateinit var heartRateSource: HeartRateSource
+
+    private lateinit var connectionManager: WearConnectionManager
+
+    private var connectionText by mutableStateOf("Connection stopped")
 
     private var pageStarted = false
     private var lastHeartRateStatus: SensorStatus? = null
@@ -56,6 +63,20 @@ class SensorActivity : ComponentActivity() {
         accelerometerSource = SensorManagerAccelerometerSource(this)
 
         heartRateSource = HealthServicesHeartRateSource(this)
+
+        connectionManager = WearConnectionManager(
+            context = this,
+            localRole = DeviceRole.WATCH
+        ) { info ->
+            connectionText = when (info.status) {
+                ConnectionStatus.STOPPED -> "Connection stopped"
+                ConnectionStatus.SEARCHING -> "Searching for phone"
+                ConnectionStatus.DISCONNECTED -> "Phone disconnected"
+                ConnectionStatus.WAITING_FOR_APP -> "Waiting for phone app"
+                ConnectionStatus.CONNECTED -> "Phone connected"
+                ConnectionStatus.ERROR -> "Connection error"
+            }
+        }
 
         setContent {
             MobileWearableApplicationTheme {
@@ -85,6 +106,11 @@ class SensorActivity : ComponentActivity() {
                         color = Color.White,
                         fontSize = 14.sp
                     )
+                    Text(
+                        text = connectionText,
+                        color = Color.LightGray,
+                        fontSize = 12.sp
+                    )
                 }
             }
         }
@@ -92,6 +118,7 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        connectionManager.start()
         pageStarted = true
 
         accelerometerSource.start(
@@ -124,6 +151,7 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStop() {
         pageStarted = false
+        connectionManager.stop()
 
         accelerometerSource.stop()
 

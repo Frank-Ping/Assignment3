@@ -9,15 +9,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,24 +25,63 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mobile_wearableapplication.ui.theme.MobileWearableApplicationTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.example.mobile_wearableapplication.communication.ConnectionStatus
+import com.example.mobile_wearableapplication.communication.DeviceRole
+import com.example.mobile_wearableapplication.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+
+    private lateinit var connectionManager: WearConnectionManager
+
+    private var connectionText by mutableStateOf("Connection stopped")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        connectionManager = WearConnectionManager(
+            context = this,
+            localRole = DeviceRole.PHONE
+        ) { info ->
+            connectionText = when (info.status) {
+                ConnectionStatus.STOPPED -> "Connection stopped"
+                ConnectionStatus.SEARCHING -> "Searching for watch"
+                ConnectionStatus.DISCONNECTED -> "Watch disconnected"
+                ConnectionStatus.WAITING_FOR_APP -> "Waiting for watch app"
+                ConnectionStatus.CONNECTED -> "Watch connected"
+                ConnectionStatus.ERROR -> "Connection error"
+            }
+        }
+
         setContent {
             MobileWearableApplicationTheme(darkTheme = true) {
                 SensorPage(
-                    onBack = { finish() }
+                    onBack = { finish() },
+                    connectionText = connectionText
                 )
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        connectionManager.start()
+    }
+
+    override fun onStop() {
+        connectionManager.stop()
+        super.onStop()
+    }
 }
 
 @Composable
-private fun SensorPage(onBack: () -> Unit) {
+private fun SensorPage(
+    onBack: () -> Unit,
+    connectionText: String = "Connection stopped"
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -77,6 +111,13 @@ private fun SensorPage(onBack: () -> Unit) {
                 color = Color.White,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+            )
+
+            Text(
+                text = connectionText,
+                color = Color.LightGray,
+                fontSize = 14.sp,
                 textAlign = TextAlign.Center
             )
 
