@@ -94,9 +94,13 @@ class DebugHistoryReceiver : BroadcastReceiver() {
         HistoryPreviewStore.value = HistoryPreview(
             ProcessingSnapshot(chartOutput = ChartOutput(heartRate = hr, rms = rms,
                 zoneDurations = durations, zoneIntervals = intervals),
-                restingHeartRate = MetricResult.Available(68.0, CalculationEvidence(sources = setOf(SampleSource.DEMO)))),
+                restingHeartRate = MetricResult.Available(68.0, CalculationEvidence(sources = setOf(SampleSource.DEMO))),
+                // Synthetic summary fixture, not a result calculated from minute-spaced chart points.
+                recovery = MetricResult.Available(
+                    RecoveryRate(startBpm = 150.0, endBpm = 120.0, declineBpm = 30.0, bpmPerMinute = 30.0),
+                    CalculationEvidence(sources = setOf(SampleSource.DEMO)))),
             start
         )
-        resultData = "Loaded 12 hourly demo buckets; live readings unchanged"
+        resultData = "Loaded demo history and recovery summary (30 bpm/min); current HR unchanged"
     }
 }
