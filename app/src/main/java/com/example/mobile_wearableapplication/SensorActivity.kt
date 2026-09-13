@@ -156,6 +156,12 @@ class SensorActivity : ComponentActivity() {
 
         if (pageStarted) return
         pageStarted = true
+        HistoryPreviewStore.sessionAction = { name ->
+            val action = SessionAction.entries.firstOrNull { it.name == name }
+            if (action == null) "Invalid sessionAction" else if (!controls.connected || !controls.synchronized ||
+                controls.pending || controls.state?.allows(action) != true) "Not ready or invalid phase; wait for watch confirmation"
+            else { sessionClient.command(action); "Requested ${action.label}; wait for watch ACK" }
+        }
 
         // Remove any previous refresh before scheduling a new one.
         refreshHandler.removeCallbacks(refreshTask)
@@ -175,6 +181,7 @@ class SensorActivity : ComponentActivity() {
     private fun stopPageResources() {
         if (!pageStarted) return
         pageStarted = false
+        HistoryPreviewStore.sessionAction = null
 
         refreshHandler.removeCallbacksAndMessages(null)
         sessionClient.stop()
@@ -266,8 +273,14 @@ class SensorActivity : ComponentActivity() {
                 is MetricResult.Unavailable -> metricStatus(result)
             },
             "details" to recoveryText(processing.recovery, processing.recoveryRemainingSeconds),
+            "recoveryQuality" to if (processing.recoveryStartedAt == null) "Recovery has not started" else
+                "Movement during recovery: ${when (processing.quality.movementDuringRecovery) {
+                    true -> "Detected"
+                    false -> "No movement detected in observed window"
+                    null -> "Unknown / insufficient acceleration coverage"
+                }}\nHR reception: ${display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"}\nCountdown follows watch data, not phone time.",
             "summary" to summaryText(display.currentSummary),
-            "previous" to summaryText(display.lastSummary),
+            "previous" to summaryText(display.lastSummary?.takeIf { it.session != processing.session }),
             "hrChart" to "${display.charts.heartRate.size} raw samples · ${display.charts.gaps.count { it.stream == "HR" }} gaps",
             "zoneChart" to zoneDurationText(display.charts.zoneDurations),
             "rms" to "${metricStatus(processing.accelerationRms)} · ${processing.motion.state}\n${display.charts.rms.size} points"
@@ -311,9 +324,10 @@ class SensorActivity : ComponentActivity() {
 
     private fun summaryText(summary: com.example.mobile_wearableapplication.processing.SessionSummary?): String =
         summary?.let {
-            "${it.session.sessionId}\nBaseline: ${metricStatus(it.restingHeartRate)}\n" +
+            "${it.session.sessionId}\nBaseline: ${metricStatus(it.restingHeartRate)}${if (it.restingHeartRate is MetricResult.Available) " bpm" else ""}\n" +
                 "Exercise HR: ${exerciseHeartRateText(it.exerciseHeartRate)}\n" +
-                "Recovery: ${recoveryText(it.recovery, null)}"
+                "Recovery: ${recoveryText(it.recovery, null)}\n" +
+                "Intensity durations: ${zoneDurationText(it.zoneDurations)}"
         } ?: "— (no completed session)"
 
     private fun exerciseHeartRateText(result: com.example.mobile_wearableapplication.processing.MetricResult<com.example.mobile_wearableapplication.processing.ExerciseHeartRate>): String =
@@ -338,15 +352,28 @@ class SensorActivity : ComponentActivity() {
 
     private fun recoveryText(result: MetricResult<com.example.mobile_wearableapplication.processing.RecoveryRate>, remaining: Long?): String =
         when (result) {
-            is MetricResult.Unavailable -> metricStatus(result) +
+            is MetricResult.Unavailable -> "— (${when (result.reason) {
+                com.example.mobile_wearableapplication.processing.UnavailableReason.INTERRUPTED_BY_MOVEMENT -> "Interrupted by movement"
+                com.example.mobile_wearableapplication.processing.UnavailableReason.RECOVERY_MOTION_UNKNOWN -> "Recovery motion unknown: insufficient acceleration coverage"
+                com.example.mobile_wearableapplication.processing.UnavailableReason.INSUFFICIENT_DATA -> "Insufficient data: incomplete recovery or inadequate endpoint coverage"
+                com.example.mobile_wearableapplication.processing.UnavailableReason.COLLECTING_RECOVERY -> "Collecting recovery"
+                com.example.mobile_wearableapplication.processing.UnavailableReason.AWAITING_PHASE_CONFIRMATION -> "Waiting for confirmed recovery phase"
+                else -> result.reason.name.lowercase().replace('_', ' ')
+            }})" +
                 (if (remaining != null && remaining > 0) " ($remaining s remaining; watch sample time)" else "")
             is MetricResult.Available -> {
                 val r = result.value
                 "\nH0: %.1f bpm; H60: %.1f bpm\nDrop: %.1f bpm\nRate: %.1f bpm/min (1-minute average decline)".format(
                     r.startBpm, r.endBpm, r.declineBpm, r.bpmPerMinute) +
-                    (if (r.declineBpm < 0) "\nHeart rate has not declined" else "")
+                    (if (r.declineBpm <= 0) "\nHeart rate has not declined" else "") +
+                    "\nH0 window [−5s, 0s): ${evidenceText(r.startEvidence)}" +
+                    "\nH60 window [+55s, +60s): ${evidenceText(r.endEvidence)}"
             }
         }
+
+    private fun evidenceText(evidence: com.example.mobile_wearableapplication.processing.CalculationEvidence): String =
+        "coverage ${evidence.coverageFraction?.let { String.format(Locale.US, "%.0f%%", it * 100) } ?: "—"}; " +
+            "${evidence.sampleCount} valid samples; HR ${evidence.sources.joinToString().ifEmpty { "—" }}"
 
     private fun zoneDurationText(value: com.example.mobile_wearableapplication.processing.ZoneDurations?): String {
         if (value == null) return "— (waiting for exercise)"
@@ -404,6 +431,8 @@ private fun SensorPage(
     onSync: () -> Unit = {}
 ) {
     var controlsExpanded by rememberSaveable { mutableStateOf(false) }
+    var recoveryExpanded by rememberSaveable { mutableStateOf(false) }
+    var previousExpanded by rememberSaveable { mutableStateOf(false) }
     var intensityTab by rememberSaveable { mutableStateOf(false) }
     var diagnosticsExpanded by rememberSaveable { mutableStateOf(false) }
     val cyan = Color(0xFF00DDE7)
@@ -503,6 +532,24 @@ private fun SensorPage(
                 Text("Movement RMS · m/s²", color = Color.White)
                 MovementChart(chartProcessing, chartNowMillis, chartEpochOffsetMillis)
             }
+            DisplayCard {
+                TextButton(onClick = { recoveryExpanded = !recoveryExpanded }) {
+                    Text(if (recoveryExpanded) "Hide recovery details" else "Recovery details", color = cyan)
+                }
+                if (recoveryExpanded) {
+                    Text(value("details"), color = Color.LightGray, fontSize = 13.sp)
+                    Text(value("recoveryQuality"), color = Color.LightGray, fontSize = 12.sp)
+                }
+                Text("Current session summary", color = Color.White)
+                Text(value("summary"), color = Color.LightGray, fontSize = 13.sp)
+                TextButton(onClick = { previousExpanded = !previousExpanded }) {
+                    Text(if (previousExpanded) "Hide previous summary" else "Previous session summary", color = cyan)
+                }
+                if (previousExpanded) {
+                    Text("Previous completed session · this app run only", color = Color.White, fontSize = 12.sp)
+                    Text(value("previous"), color = Color.LightGray, fontSize = 13.sp)
+                }
+            }
             TextButton(onClick = { controlsExpanded = !controlsExpanded }) {
                 Text(if (controlsExpanded) "Hide session controls" else "Session controls", color = cyan)
             }
@@ -541,11 +588,7 @@ private fun SensorPage(
                 Text("Current: ${value("exerciseCurrentReason")}", color = Color.LightGray, fontSize = 12.sp)
                 Text(value("exerciseStatistics"), color = Color.LightGray, fontSize = 12.sp)
             }
-            DisplayCard {
-                Text("Recovery details / Session summary", color = Color.White)
-                Text(value("details"), color = Color.LightGray, fontSize = 13.sp)
-                Text("Current summary\n${value("summary")}\n\nLast completed (this app run)\n${value("previous")}", color = Color.LightGray, fontSize = 13.sp)
-            }
+
 
                     Text("$accelerationPreview\n\n$heartRatePreview\n\n$processingText\n\n$transferText\n\n$sessionText",
                         color = Color.LightGray, fontSize = 12.sp)
