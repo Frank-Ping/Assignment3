@@ -26,7 +26,7 @@ data class SessionState(
     }
 }
 data class SessionCommand(val commandId: String, val action: SessionAction, val expectedSessionId: String?, val expectedRevision: Long)
-data class SessionReply(val requestId: String, val accepted: Boolean, val error: String?, val state: SessionState)
+data class SessionReply(val requestId: String, val accepted: Boolean, val error: String?, val state: SessionState, val heartRateSource: String? = null)
 
 /** Identical wire format in both application modules; longs are decimal strings. */
 object SessionProtocol {
@@ -50,6 +50,7 @@ object SessionProtocol {
     fun decodeQuery(bytes: ByteArray): String = id(parse(bytes).getString("requestId"))
     fun encodeReply(reply: SessionReply): ByteArray = JSONObject().apply {
         put("version", 1); put("requestId", reply.requestId); put("accepted", reply.accepted)
+        put("heartRateSource", reply.heartRateSource ?: JSONObject.NULL)
         put("error", reply.error ?: JSONObject.NULL)
         put("sessionId", reply.state.sessionId ?: JSONObject.NULL)
         put("revision", reply.state.revision.toString()); put("lifecycle", reply.state.lifecycle.name)
@@ -83,7 +84,8 @@ object SessionProtocol {
             else require(state.endedAtNanos != null && state.endedAtNanos >= transitions.last().watchElapsedTimeNanos)
         }
         SessionReply(id(json.getString("requestId")), json.getBoolean("accepted"),
-            if (json.isNull("error")) null else json.getString("error").take(256), state)
+            if (json.isNull("error")) null else json.getString("error").take(256), state,
+            if (json.isNull("heartRateSource")) null else json.getString("heartRateSource").also { require(it == "REAL" || it == "DEMO") })
     }
 }
 

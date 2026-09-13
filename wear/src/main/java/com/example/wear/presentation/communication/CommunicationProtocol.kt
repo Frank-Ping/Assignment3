@@ -67,6 +67,7 @@ object CommunicationProtocol {
     const val SENSOR_ACK_PATH = "/sensor/ack"
     const val SESSION_COMMAND_PATH = "/session/command"
     const val SESSION_STATE_PATH = "/session/state"
+    const val SOURCE_COMMAND_PATH = "/session/source"
     const val SESSION_QUERY_PATH = "/session/query"
 
     // These are application limits, not API limits.

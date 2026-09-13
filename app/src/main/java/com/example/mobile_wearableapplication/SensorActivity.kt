@@ -134,6 +134,7 @@ class SensorActivity : ComponentActivity() {
                     overview = overview,
                     controls = controls,
                     onAction = { sessionClient.command(it) },
+                    onSourceToggle = { sessionClient.toggleHeartRateSource() },
                     onSync = { sessionClient.sync() }
                 )
             }
@@ -189,14 +190,46 @@ class SensorActivity : ComponentActivity() {
         heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
         val processing = display.processing
         val preprocessing = processing.preprocessing
+        val exercise = (processing.exerciseHeartRate as? MetricResult.Available)?.value
+        val intensity = (processing.intensity as? MetricResult.Available)?.value
+        val exercising = processing.exerciseStartedAt != null && processing.recoveryStartedAt == null &&
+            processing.endedAtNanos == null
+        val currentReason = when {
+            !exercising -> "Only available during exercise"
+            display.unavailableReason(WireDataType.HEART_RATE) != null -> display.unavailableReason(WireDataType.HEART_RATE)
+            exercise?.currentBpm == null -> "Insufficient fresh data"
+            else -> "3-second smoothed HR"
+        }
+        fun bpm(value: Double?) = value?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
         overview = mapOf(
             "current" to (display.currentHeartRateBpm?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
             "source" to (snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.source?.name ?: "—"),
             "freshness" to (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
             "intensity" to intensityText(processing.intensity),
             "exercise" to exerciseHeartRateText(processing.exerciseHeartRate),
-            "baseline" to (metricStatus(processing.restingHeartRate) +
-                if (processing.restingHeartRate is MetricResult.Available) " bpm" else ""),
+            "exerciseCurrent" to bpm(exercise?.currentBpm.takeIf {
+                exercising && display.unavailableReason(WireDataType.HEART_RATE) == null
+            }),
+            "exerciseCurrentReason" to (currentReason ?: "Waiting for data"),
+            "exerciseAverage" to bpm(exercise?.timeWeightedAverageBpm),
+            "exercisePeak" to bpm(exercise?.smoothedPeakBpm),
+            "exerciseStatistics" to when (val result = processing.exerciseHeartRate) {
+                is MetricResult.Unavailable -> metricStatus(result)
+                is MetricResult.Available -> if (exercising) "Average: time weighted · Peak: smoothed"
+                    else "Retained exercise statistics · Peak: smoothed"
+            },
+            "intensityZone" to (intensity?.zone?.name ?: ""),
+            "baseline" to when (val result = processing.restingHeartRate) {
+                is MetricResult.Available -> bpm(result.value)
+                is MetricResult.Unavailable -> metricStatus(result)
+            },
+            "baselineState" to when {
+                processing.exerciseStartedAt != null || processing.endedAtNanos != null ->
+                    if (processing.restingHeartRate is MetricResult.Available) "Frozen session baseline"
+                    else "Baseline window closed; no valid baseline"
+                processing.restingHeartRate is MetricResult.Available -> "Valid resting baseline"
+                else -> "Requires 30 seconds of stillness and sufficient HR data"
+            },
             "recovery" to when (val result = processing.recovery) {
                 is MetricResult.Available -> String.format(Locale.US, "%.1f bpm/min", result.value.bpmPerMinute)
                 is MetricResult.Unavailable -> metricStatus(result)
@@ -332,15 +365,33 @@ private fun SensorPage(
     overview: Map<String, String> = emptyMap(),
     controls: SessionControlUi = SessionControlUi(),
     onAction: (SessionAction) -> Unit = {},
+    onSourceToggle: () -> Unit = {},
     onSync: () -> Unit = {}
 ) {
+    var controlsExpanded by rememberSaveable { mutableStateOf(false) }
     var intensityTab by rememberSaveable { mutableStateOf(false) }
     var diagnosticsExpanded by rememberSaveable { mutableStateOf(false) }
     val cyan = Color(0xFF00DDE7)
     val coral = Color(0xFFFF7973)
+    val session = controls.state
+    val workoutLabel = when (session?.lifecycle) {
+        null -> "Unknown"
+        SessionLifecycle.IDLE -> "Not Started"
+        SessionLifecycle.ENDED -> "Ended"
+        SessionLifecycle.INTERRUPTED -> "Interrupted"
+        SessionLifecycle.RUNNING -> session.phase?.label ?: "Unknown"
+    }
+    val primaryAction = when {
+        session == null -> null
+        session.lifecycle != SessionLifecycle.RUNNING -> SessionAction.START_SESSION
+        session.phase == SessionPhase.RESTING -> SessionAction.START_WORKOUT
+        session.phase == SessionPhase.EXERCISING -> SessionAction.END_WORKOUT
+        session.phase == SessionPhase.RECOVERING -> SessionAction.FINISH_SESSION
+        else -> null
+    }
     fun value(key: String) = overview[key] ?: "— (waiting for data)"
     Box(Modifier.fillMaxSize().background(verticalGradient(listOf(
-        Color(0xFF10191D), Color(0xFF1B3036), Color(0xFF101519)
+        Color(0xFF000000), Color(0xFF303030)
     ))).safeDrawingPadding()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -350,50 +401,51 @@ private fun SensorPage(
                 Text("Sensor Data", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
             }
             DisplayCard {
-                Text(connectionText, color = Color.White)
-                Text("HR · ${value("source")}  |  ${value("freshness")}", color = cyan, fontSize = 12.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(connectionText, color = Color.White, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onSourceToggle,
+                        enabled = controls.connected && controls.synchronized && !controls.pending &&
+                            session != null && session.lifecycle != SessionLifecycle.RUNNING && controls.heartRateSource != null) {
+                        Text("⇄ HR · ${controls.heartRateSource ?: "—"}", color = if (controls.pending || session?.lifecycle == SessionLifecycle.RUNNING) Color.Gray else cyan)
+                    }
+                }
+                if (controls.pending || !controls.synchronized)
+                    Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
             }
             DisplayCard {
-                Text("Workout state", color = Color.LightGray, fontSize = 12.sp)
-                Text("${if (controls.synchronized) "" else "Last confirmed: "}${controls.state?.phase?.label ?: "—"} · ${controls.state?.lifecycle ?: "No session"}", color = Color.White)
-                Text("Exercise intensity · ${value("intensity")}", color = cyan, fontSize = 13.sp)
+                Text("Exercise intensity · ${value("intensity")}", color = when (overview["intensityZone"]) {
+                    "LOW" -> cyan
+                    "MODERATE" -> Color(0xFFFFD166)
+                    "HIGH" -> coral
+                    else -> Color.LightGray
+                }, fontSize = 13.sp)
             }
+            DisplayCard {
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("♥", color = coral, fontSize = 48.sp)
                 Column {
                     Text("Current heart rate", color = Color.White, fontSize = 16.sp)
+                    Text("Raw HR · ${value("freshness")}", color = Color.LightGray, fontSize = 12.sp)
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(overview["current"] ?: "—", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
                         Text(" bpm", color = Color.LightGray, fontSize = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
                     }
                 }
             }
-            DisplayCard {
-                Text("Exercise heart rate", color = Color.White, fontWeight = FontWeight.Medium)
-                Text(value("exercise").trim(), color = Color.LightGray, fontSize = 14.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 DisplayCard(Modifier.weight(1f)) {
                     Text("Session resting heart rate", color = coral, fontSize = 14.sp)
                     Text(value("baseline"), color = Color.White, fontSize = 18.sp)
+                    Text(value("baselineState"), color = Color.LightGray, fontSize = 12.sp)
                 }
                 DisplayCard(Modifier.weight(1f)) {
                     Text("Workout Recovery Rate", color = coral, fontSize = 14.sp)
                     Text(value("recovery"), color = Color.White, fontSize = 18.sp)
                 }
-            }
-            DisplayCard {
-                Text("Session controls", color = Color.White)
-                Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
-                SessionAction.entries.forEach { action ->
-                    Button(onClick = { onAction(action) }, modifier = Modifier.fillMaxWidth(),
-                        enabled = controls.synchronized && !controls.pending && controls.state?.allows(action) == true) {
-                        Text(action.label)
-                    }
-                }
-                TextButton(onClick = onSync, enabled = controls.connected && !controls.pending) { Text("Sync state") }
             }
             DisplayCard {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -411,6 +463,44 @@ private fun SensorPage(
                     Text("Chart preview unavailable", color = Color.Gray, fontSize = 12.sp)
                 }
             }
+            TextButton(onClick = { controlsExpanded = !controlsExpanded }) {
+                Text(if (controlsExpanded) "Hide session controls" else "Session controls", color = cyan)
+            }
+            if (controlsExpanded) {
+            DisplayCard {
+                Text("Workout state · ${if (!controls.synchronized) "Last confirmed: " else ""}$workoutLabel", color = Color.White)
+                Text(controls.message, color = Color.LightGray, fontSize = 12.sp)
+                Button(onClick = { primaryAction?.let(onAction) }, modifier = Modifier.fillMaxWidth(),
+                    enabled = controls.connected && controls.synchronized && !controls.pending &&
+                        primaryAction != null && session?.allows(primaryAction) == true) {
+                    Text(if (controls.pending) "Waiting for confirmation…"
+                        else primaryAction?.label ?: "Waiting for watch state")
+                }
+                if (primaryAction == SessionAction.END_WORKOUT)
+                    Text("Starts recovery; sensor collection continues.", color = Color.LightGray, fontSize = 12.sp)
+                if (primaryAction == SessionAction.FINISH_SESSION)
+                    Text("Ends the session and stops sensor collection.", color = Color.LightGray, fontSize = 12.sp)
+                TextButton(onClick = onSync, enabled = controls.connected && !controls.pending) { Text("Sync state") }
+            }
+            }
+            DisplayCard {
+                TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
+                    Text(if (diagnosticsExpanded) "Hide diagnostics" else "Show diagnostics", color = cyan)
+                }
+                if (diagnosticsExpanded) {
+            DisplayCard {
+                Text("Exercise heart rate", color = Color.White, fontWeight = FontWeight.Medium)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Current" to "exerciseCurrent", "Average" to "exerciseAverage", "Peak" to "exercisePeak").forEach { (label, key) ->
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(label, color = Color.LightGray, fontSize = 12.sp)
+                            Text(overview[key] ?: "—", color = Color.White, fontSize = 16.sp)
+                        }
+                    }
+                }
+                Text("Current: ${value("exerciseCurrentReason")}", color = Color.LightGray, fontSize = 12.sp)
+                Text(value("exerciseStatistics"), color = Color.LightGray, fontSize = 12.sp)
+            }
             DisplayCard {
                 Text("Movement RMS · m/s²", color = Color.White)
                 Column(Modifier.heightIn(min = 100.dp), verticalArrangement = Arrangement.Center) {
@@ -423,11 +513,7 @@ private fun SensorPage(
                 Text(value("details"), color = Color.LightGray, fontSize = 13.sp)
                 Text("Current summary\n${value("summary")}\n\nLast completed (this app run)\n${value("previous")}", color = Color.LightGray, fontSize = 13.sp)
             }
-            DisplayCard {
-                TextButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
-                    Text(if (diagnosticsExpanded) "Hide diagnostics" else "Show diagnostics", color = cyan)
-                }
-                if (diagnosticsExpanded) {
+
                     Text("$accelerationPreview\n\n$heartRatePreview\n\n$processingText\n\n$transferText\n\n$sessionText",
                         color = Color.LightGray, fontSize = 12.sp)
                     Text("Rolling history in memory; receiving while this page is active. Recent/Stale describes receipt time, not measurement accuracy.", color = Color.Gray, fontSize = 12.sp)

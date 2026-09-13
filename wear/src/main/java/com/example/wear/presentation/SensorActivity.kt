@@ -106,6 +106,23 @@ class SensorActivity : ComponentActivity() {
     private fun receiveSession(node: String, path: String, bytes: ByteArray) {
         if (!pageStarted || activePageOwner !== pageOwner) return
         val reply = when (path) {
+            CommunicationProtocol.SOURCE_COMMAND_PATH -> {
+                require(bytes.size in 1..1024)
+                val request = org.json.JSONObject(bytes.toString(Charsets.UTF_8))
+                val id = request.getString("requestId")
+                require(id.isNotBlank() && id.length <= 128)
+                val source = HeartRateSourceType.valueOf(request.getString("source"))
+                val state = sessionController.state
+                val sessionId = if (request.isNull("sessionId")) null else request.getString("sessionId")
+                val accepted = !collecting && state.lifecycle != SessionLifecycle.RUNNING &&
+                    state.revision == request.getLong("revision") && state.sessionId == sessionId
+                if (accepted) {
+                    selectedSource = source
+                    heartRateText = "-- bpm"
+                    heartRateStatus = SensorStatus.NOT_STARTED
+                }
+                SessionReply(id, accepted, if (accepted) null else "Finish session and sync before changing HR source", state)
+            }
             CommunicationProtocol.SESSION_QUERY_PATH -> SessionReply(SessionProtocol.decodeQuery(bytes), true, null, sessionController.state)
             CommunicationProtocol.SESSION_COMMAND_PATH -> {
                 val before = sessionController.state
@@ -121,7 +138,7 @@ class SensorActivity : ComponentActivity() {
         }
         showSession()
         sessionMessage = reply.error ?: "Session confirmed"
-        sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH, SessionProtocol.encodeReply(reply))
+        sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH, SessionProtocol.encodeReply(reply.copy(heartRateSource = selectedSource.name)))
     }
 
     private lateinit var sender: SensorDataSender

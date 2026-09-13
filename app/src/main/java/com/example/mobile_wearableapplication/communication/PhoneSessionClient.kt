@@ -8,7 +8,7 @@ import java.util.UUID
 data class SessionControlUi(
     val state: SessionState? = null, val synchronized: Boolean = false,
     val pending: Boolean = false, val message: String = "Waiting for watch",
-    val connected: Boolean = false
+    val connected: Boolean = false, val heartRateSource: String? = null
 )
 class PhoneSessionClient(
     context: Context,
@@ -46,7 +46,7 @@ class PhoneSessionClient(
                         reply.state.lifecycle == SessionLifecycle.ENDED -> "Session ended; collection stopped"
                         else -> "Watch confirmed"
                     }
-                    update(SessionControlUi(reply.state, true, false, message, true))
+                    update(SessionControlUi(reply.state, true, false, message, true, reply.heartRateSource))
                     scheduleRefresh()
                 }
             }
@@ -102,6 +102,22 @@ class PhoneSessionClient(
         transport.send(node, CommunicationProtocol.SESSION_COMMAND_PATH,
             SessionProtocol.encodeCommand(SessionCommand(id, action, state.sessionId, state.revision)))
     }
+    fun toggleHeartRateSource() {
+        val node = peer ?: return
+        val state = ui.state ?: return
+        val source = ui.heartRateSource ?: return
+        if (!running || !transport.ready || !ui.synchronized || ui.pending || state.lifecycle == SessionLifecycle.RUNNING) return
+        val id = UUID.randomUUID().toString()
+        beginRequest(id, "Confirming HR source", isQuery = false)
+        val payload = org.json.JSONObject().apply {
+            put("requestId", id)
+            put("source", if (source == "REAL") "DEMO" else "REAL")
+            put("revision", state.revision)
+            put("sessionId", state.sessionId ?: org.json.JSONObject.NULL)
+        }.toString().toByteArray(Charsets.UTF_8)
+        transport.send(node, CommunicationProtocol.SOURCE_COMMAND_PATH, payload)
+    }
+
     private fun beginRequest(id: String, message: String, isQuery: Boolean, retainConfirmation: Boolean = false) {
         requestId = id
         update(ui.copy(pending = true, synchronized = retainConfirmation && ui.synchronized, message = message))
