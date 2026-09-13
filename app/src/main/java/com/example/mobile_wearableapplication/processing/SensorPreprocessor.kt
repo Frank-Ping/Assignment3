@@ -88,14 +88,16 @@ class SensorPreprocessor {
             }
         }
 
-        fun window(end: Long, duration: Long): CoveredWindow {
-            val start = (end - duration).coerceAtLeast(0L)
+        fun window(end: Long, duration: Long, notBefore: Long = 0L): CoveredWindow {
+            val start = maxOf((end - duration).coerceAtLeast(0L), notBefore).coerceAtMost(end)
             var covered = 0L
             var weighted = 0.0
             var smoothDuration = 0L
             var count = 0
             val latest = points.lastOrNull()
             for ((index, point) in points.withIndex()) {
+                // Never hold a previous phase's reading across its boundary.
+                if (point.time < notBefore) continue
                 if (point.valid && point.time >= start && point.time < end) count++
                 if (!point.valid || !point.mayHold) continue
                 val nextTime = points.getOrNull(index + 1)?.time ?: end
@@ -108,7 +110,7 @@ class SensorPreprocessor {
                     smoothDuration += nanos
                 }
             }
-            val fresh = latest != null && latest.valid && latest.mayHold && end - latest.time <= hold
+            val fresh = latest != null && latest.valid && latest.mayHold && latest.time >= notBefore && end - latest.time <= hold
             val mean = if (fresh && smoothDuration > 0) weighted / (smoothDuration.toDouble() / SECOND) else null
             return CoveredWindow(CalculationWindow(start, end), covered.toDouble() / SECOND,
                 if (end > start) covered.toDouble() / (end - start) else 0.0, count, mean,
@@ -131,10 +133,11 @@ class SensorPreprocessor {
     private fun advance(time: Long) { asOf = maxOf(asOf ?: time, time) }
     fun breakContinuity() { heartRate.breakContinuity(); acceleration.breakContinuity() }
 
-    fun snapshot(): PreprocessingSnapshot {
-        val end = asOf
-        return PreprocessingSnapshot(end, heartRate.points.lastOrNull()?.takeIf { it.valid }?.value,
-            end?.let { heartRate.window(it, 3 * SECOND) }, end?.let { heartRate.window(it, 5 * SECOND) },
+    fun snapshot(phaseStartedAt: Long? = null): PreprocessingSnapshot {
+        val end = asOf?.let { maxOf(it, phaseStartedAt ?: it) }
+        val boundary = phaseStartedAt ?: 0L
+        return PreprocessingSnapshot(end, heartRate.points.lastOrNull()?.takeIf { it.valid && it.time >= boundary }?.value,
+            end?.let { heartRate.window(it, 3 * SECOND, boundary) }, end?.let { heartRate.window(it, 5 * SECOND, boundary) },
             end?.let { acceleration.window(it, SECOND) }, heartRate.stats, acceleration.stats)
     }
 }

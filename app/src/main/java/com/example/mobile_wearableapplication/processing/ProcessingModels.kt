@@ -71,4 +71,12 @@ data class ProcessingSnapshot(
     val workoutState: MetricResult<ConfirmedPhaseEvent> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
     val accelerationRms: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
     val quality: ProcessingQuality = ProcessingQuality()
-)
+) {
+    // Watch elapsed time in nanoseconds; derived from the confirmed history to avoid duplicate state.
+    val restingStartedAt: Long?
+        get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.RESTING }?.watchElapsedTimeNanos
+    val exerciseStartedAt: Long?
+        get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.EXERCISING }?.watchElapsedTimeNanos
+    val recoveryStartedAt: Long?
+        get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.RECOVERING }?.watchElapsedTimeNanos
+}

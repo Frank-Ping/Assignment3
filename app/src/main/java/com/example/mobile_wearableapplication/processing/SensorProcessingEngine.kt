@@ -58,6 +58,14 @@ class SensorProcessingEngine {
         }
         if (previous != null && (event.revision <= previous.revision ||
                 event.watchElapsedTimeNanos < previous.watchElapsedTimeNanos)) return
+        if (state.endedAtNanos != null) return
+        val expectedPhase = when (previous?.phase) {
+            null -> WorkoutPhase.RESTING
+            WorkoutPhase.RESTING -> WorkoutPhase.EXERCISING
+            WorkoutPhase.EXERCISING -> WorkoutPhase.RECOVERING
+            WorkoutPhase.RECOVERING -> return
+        }
+        if (event.phase != expectedPhase) return
         state = state.copy(workoutState = MetricResult.Available(event, CalculationEvidence()),
             phaseHistory = state.phaseHistory + event)
     }
@@ -79,7 +87,7 @@ class SensorProcessingEngine {
 
     @Synchronized
     fun snapshot(): ProcessingSnapshot {
-        val preprocessing = preprocessor.snapshot()
+        val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
         val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot(preprocessing.asOfWatchNanos)
         return state.copy(preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
             stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
