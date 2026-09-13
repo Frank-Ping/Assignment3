@@ -1,5 +1,7 @@
 package com.example.mobile_wearableapplication
 
+import com.example.mobile_wearableapplication.communication.SensorDataReceiver
+import com.example.mobile_wearableapplication.communication.WireDataType
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,6 +35,12 @@ import com.example.mobile_wearableapplication.communication.DeviceRole
 import com.example.mobile_wearableapplication.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+    private lateinit var receiver: SensorDataReceiver
+    private var peerNodeId: String? = null
+    private var transferText by mutableStateOf("No batch received")
+    private var accelerationPreview by mutableStateOf("Acceleration: --")
+    private var heartRatePreview by mutableStateOf("Heart rate: --")
+
 
     private lateinit var connectionManager: WearConnectionManager
 
@@ -46,6 +54,7 @@ class SensorActivity : ComponentActivity() {
             context = this,
             localRole = DeviceRole.PHONE
         ) { info ->
+            peerNodeId = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
             connectionText = when (info.status) {
                 ConnectionStatus.STOPPED -> "Connection stopped"
                 ConnectionStatus.SEARCHING -> "Searching for watch"
@@ -56,11 +65,25 @@ class SensorActivity : ComponentActivity() {
             }
         }
 
+        receiver = SensorDataReceiver(this, { peerNodeId }, { batch ->
+            val sample = batch.samples.last()
+            val preview = "${batch.dataType} (${batch.source})\n" +
+                "Sequence: ${sample.sequence}\nTime: ${sample.timestampNanos}\n" +
+                if (batch.dataType == WireDataType.ACCELEROMETER) {
+                    "X: ${sample.x}  Y: ${sample.y}  Z: ${sample.z} m/s²"
+                } else "${sample.bpm} bpm"
+            if (batch.dataType == WireDataType.ACCELEROMETER) accelerationPreview = preview
+            else heartRatePreview = preview
+        }, { transferText = it })
+
         setContent {
             MobileWearableApplicationTheme(darkTheme = true) {
                 SensorPage(
                     onBack = { finish() },
-                    connectionText = connectionText
+                    connectionText = connectionText,
+                    transferText = transferText,
+                    accelerationPreview = accelerationPreview,
+                    heartRatePreview = heartRatePreview
                 )
             }
         }
@@ -68,11 +91,14 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        receiver.start()
         connectionManager.start()
     }
 
     override fun onStop() {
+        receiver.stop()
         connectionManager.stop()
+        peerNodeId = null
         super.onStop()
     }
 }
@@ -80,7 +106,10 @@ class SensorActivity : ComponentActivity() {
 @Composable
 private fun SensorPage(
     onBack: () -> Unit,
-    connectionText: String = "Connection stopped"
+    connectionText: String = "Connection stopped",
+    transferText: String = "No batch received",
+    accelerationPreview: String = "Acceleration: --",
+    heartRatePreview: String = "Heart rate: --"
 ) {
     Box(
         modifier = Modifier
@@ -121,9 +150,12 @@ private fun SensorPage(
                 textAlign = TextAlign.Center
             )
 
+            Text(accelerationPreview, color = Color.White, fontSize = 14.sp)
+            Text(heartRatePreview, color = Color.White, fontSize = 14.sp)
+            Text(transferText, color = Color.LightGray, fontSize = 12.sp)
             Text(
-                text = "No session started",
-                modifier = Modifier.padding(bottom = 80.dp),
+                text = "Manual transfer test",
+                modifier = Modifier.padding(bottom = 8.dp),
                 color = Color.Gray,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center

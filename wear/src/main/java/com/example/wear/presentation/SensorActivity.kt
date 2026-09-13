@@ -1,5 +1,16 @@
 package com.example.wear.presentation
 
+import android.os.SystemClock
+import java.util.UUID
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.padding
+import androidx.wear.compose.material3.Button
+import com.example.wear.presentation.communication.SensorBatch
+import com.example.wear.presentation.communication.SensorDataSender
+import com.example.wear.presentation.communication.WireDataType
+import com.example.wear.presentation.communication.WireSource
+import com.example.wear.presentation.communication.WireSample
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,6 +42,28 @@ import com.example.wear.presentation.communication.DeviceRole
 import com.example.wear.presentation.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+    private lateinit var sender: SensorDataSender
+    private var peerNodeId by mutableStateOf<String?>(null)
+    private var transferText by mutableStateOf("Sender stopped")
+    private val testSessionId = UUID.randomUUID().toString()
+    private var testSequence = 0L
+
+    private fun sendTest(type: WireDataType) {
+        val nodeId = peerNodeId ?: return
+        testSequence++
+        val time = SystemClock.elapsedRealtimeNanos()
+        val sample = if (type == WireDataType.ACCELEROMETER) {
+            WireSample(testSequence, time, x = 0.12, y = -0.08, z = 9.79)
+        } else WireSample(testSequence, time, bpm = 72.0)
+        sender.sendBatch(nodeId, SensorBatch(
+            sessionId = testSessionId,
+            batchId = UUID.randomUUID().toString(),
+            dataType = type,
+            source = WireSource.DEMO,
+            samples = listOf(sample)
+        ))
+    }
+
 
     private lateinit var accelerometerSource: SensorManagerAccelerometerSource
 
@@ -68,6 +101,7 @@ class SensorActivity : ComponentActivity() {
             context = this,
             localRole = DeviceRole.WATCH
         ) { info ->
+            peerNodeId = if (info.status == ConnectionStatus.CONNECTED) info.nodeId else null
             connectionText = when (info.status) {
                 ConnectionStatus.STOPPED -> "Connection stopped"
                 ConnectionStatus.SEARCHING -> "Searching for phone"
@@ -78,12 +112,16 @@ class SensorActivity : ComponentActivity() {
             }
         }
 
+        sender = SensorDataSender(this) { transferText = it }
+
         setContent {
             MobileWearableApplicationTheme {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black),
+                        .background(Color.Black)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(
                         12.dp,
@@ -106,6 +144,13 @@ class SensorActivity : ComponentActivity() {
                         color = Color.White,
                         fontSize = 14.sp
                     )
+                    Button(onClick = { sendTest(WireDataType.ACCELEROMETER) }, enabled = peerNodeId != null) {
+                        Text("Test XYZ")
+                    }
+                    Button(onClick = { sendTest(WireDataType.HEART_RATE) }, enabled = peerNodeId != null) {
+                        Text("Test HR")
+                    }
+                    Text(transferText, color = Color.LightGray, fontSize = 12.sp)
                     Text(
                         text = connectionText,
                         color = Color.LightGray,
@@ -118,6 +163,7 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        sender.start()
         connectionManager.start()
         pageStarted = true
 
@@ -151,7 +197,9 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStop() {
         pageStarted = false
+        sender.stop()
         connectionManager.stop()
+        peerNodeId = null
 
         accelerometerSource.stop()
 
