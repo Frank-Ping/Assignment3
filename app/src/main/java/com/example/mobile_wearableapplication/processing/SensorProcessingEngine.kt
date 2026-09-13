@@ -6,6 +6,7 @@ package com.example.mobile_wearableapplication.processing
 class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private val intensityClassifier = IntensityClassifier(hrMaxBpm)
     private var state = ProcessingSnapshot()
+    private var published = state
     private var preprocessor = SensorPreprocessor()
     private var motionDetector = MotionDetector()
     private var restingCalculator = RestingHeartRateCalculator()
@@ -30,6 +31,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             intensity = pending, recovery = pending, accelerationRms = pending,
             workoutState = MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
         )
+        publish()
     }
 
     @Synchronized
@@ -42,6 +44,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         exerciseCalculator = ExerciseHeartRateCalculator()
         recoveryCalculator = RecoveryCalculator()
         zoneDurationCalculator = ZoneDurationCalculator()
+        publish()
     }
 
     @Synchronized
@@ -56,6 +59,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         state = state.copy(acceleration = summarize(
             state.acceleration, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
+        publish()
     }
 
     @Synchronized
@@ -73,6 +77,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         state = state.copy(heartRate = summarize(
             state.heartRate, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
+        publish()
     }
 
     /** Called only for a watch-confirmed event, never directly for a button click. */
@@ -98,6 +103,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         intensityClassifier.reset()
         state = state.copy(workoutState = MetricResult.Available(event, CalculationEvidence()),
             phaseHistory = state.phaseHistory + event)
+        publish()
     }
 
     @Synchronized
@@ -106,6 +112,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             restingCalculator.freeze(state.restingStartedAt, watchElapsedTimeNanos)
             state = state.copy(endedAtNanos = watchElapsedTimeNanos)
             motionDetector.interrupt()
+            publish()
         }
     }
 
@@ -117,7 +124,10 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     }
 
     @Synchronized
-    fun snapshot(): ProcessingSnapshot {
+    fun snapshot(): ProcessingSnapshot = published
+
+    /** Called only on processing events, never from a UI read. */
+    private fun publish() {
         val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
         val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot()
         val exercising = state.exerciseStartedAt != null && state.recoveryStartedAt == null && state.endedAtNanos == null
@@ -126,7 +136,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             } == true) intensityClassifier.missing()
         val intensity = if (exercising) MetricResult.Available(intensityClassifier.snapshot(), CalculationEvidence())
             else MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
-        return state.copy(zoneDurations = zoneDurationCalculator.result(state.exerciseStartedAt,
+        published = state.copy(zoneDurations = zoneDurationCalculator.result(state.exerciseStartedAt,
             state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
             preprocessing.asOfWatchNanos, state.endedAtNanos),
             recoveryRemainingSeconds = recoveryCalculator.remaining(state.recoveryStartedAt, preprocessing.asOfWatchNanos, state.endedAtNanos),
@@ -143,13 +153,14 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         exerciseCalculator.markUnavailable()
         intensityClassifier.missing()
         preprocessor.snapshot().asOfWatchNanos?.let { zoneDurationCalculator.record(it, IntensityZone.MISSING) }
+        publish()
     }
 
     @Synchronized
-    fun breakContinuity() { markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); markRecoveryMotionUnavailable() }
+    fun breakContinuity() { markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
 
     @Synchronized
-    fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt(); markRecoveryMotionUnavailable() }
+    fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
 
     private fun markRecoveryMotionUnavailable() {
         val end = state.recoveryStartedAt?.plus(60_000_000_000L)

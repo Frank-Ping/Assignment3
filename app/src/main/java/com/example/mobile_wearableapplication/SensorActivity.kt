@@ -56,6 +56,14 @@ class SensorActivity : ComponentActivity() {
             refreshHandler.postDelayed(this, 1_000L)
         }
     }
+    private val timeoutTask = object : Runnable {
+        override fun run() {
+            if (!pageStarted) return
+            ReceivedSensorStore.checkReceptionTimeouts()
+            refreshHandler.postDelayed(this, 1_000L)
+        }
+    }
+    private var pendingTransferText = "No batch received"
     private var sessionText by mutableStateOf("No session received")
     private var processingText by mutableStateOf("Processing: no session")
     private lateinit var receiver: SensorDataReceiver
@@ -75,10 +83,8 @@ class SensorActivity : ComponentActivity() {
 
         sessionClient = PhoneSessionClient(this, { node, state ->
             ReceivedSensorStore.confirmSession(node, state)
-            refreshDiagnostics()
         }, { controls = it }, { reason ->
             ReceivedSensorStore.suspendReception(reason)
-            refreshDiagnostics()
         })
 
         connectionManager = WearConnectionManager(
@@ -108,8 +114,7 @@ class SensorActivity : ComponentActivity() {
             check(pageStarted) { "Phone page not active" }
             val node = checkNotNull(peerNodeId)
             ReceivedSensorStore.accept(node, batch)
-            refreshDiagnostics()
-        }, { transferText = it })
+        }, { pendingTransferText = it })
 
         setContent {
             MobileWearableApplicationTheme(darkTheme = true) {
@@ -137,6 +142,8 @@ class SensorActivity : ComponentActivity() {
 
         // Remove any previous refresh before scheduling a new one.
         refreshHandler.removeCallbacks(refreshTask)
+        refreshHandler.removeCallbacks(timeoutTask)
+        refreshHandler.post(timeoutTask)
         refreshHandler.post(refreshTask)
         sessionClient.start()
         receiver.start()
@@ -159,6 +166,7 @@ class SensorActivity : ComponentActivity() {
         peerNodeId = null
     }
     private fun refreshDiagnostics() {
+        transferText = pendingTransferText
         val snapshot = ReceivedSensorStore.snapshot()
         val reception = ReceivedSensorStore.receptionDiagnostics()
         sessionText = snapshot?.let { "Session: ${it.sessionId}\nWatch: ${it.nodeId}" }

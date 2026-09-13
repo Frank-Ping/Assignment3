@@ -71,6 +71,8 @@ object ReceivedSensorStore {
     private var receptionMessage = "Waiting for session confirmation"
     private val interruptions = mutableListOf<ReceptionInterruption>()
     private var rejectedBatches = 0L
+    private var accelerationTimedOut = false
+    private var heartRateTimedOut = false
 
     @Synchronized
     fun suspendReception(reason: String) {
@@ -156,6 +158,7 @@ object ReceivedSensorStore {
                 stream.latest = received
                 stream.lastNewSampleAtMillis = now
                 stream.freshSinceResume = true
+                if (batch.dataType == WireDataType.ACCELEROMETER) accelerationTimedOut = false else heartRateTimedOut = false
             }
         }
         val capacity = if (batch.dataType == WireDataType.ACCELEROMETER) {
@@ -178,18 +181,20 @@ object ReceivedSensorStore {
     }
 
     @Synchronized
-    fun processingSnapshot(): ProcessingSnapshot {
+    fun processingSnapshot(): ProcessingSnapshot = processor.snapshot()
+
+    @Synchronized
+    fun checkReceptionTimeouts() {
         val lastReceipt = activeSession?.let { sessions[it] }?.get(WireDataType.ACCELEROMETER)?.lastNewSampleAtMillis
         // Receipt watchdog allows for the existing 500 ms batches; never subtract watch time here.
-        if (!receptionReady || lastReceipt == null || SystemClock.elapsedRealtime() - lastReceipt > 1_000L) {
-            processor.markAccelerationUnavailable()
-        }
+        val accelerationExpired = !receptionReady || lastReceipt == null || SystemClock.elapsedRealtime() - lastReceipt > 1_000L
+        if (accelerationExpired && !accelerationTimedOut) processor.markAccelerationUnavailable()
+        accelerationTimedOut = accelerationExpired
         val hrStream = activeSession?.let { sessions[it] }?.get(WireDataType.HEART_RATE)
         val hrReceipt = hrStream?.lastNewSampleAtMillis
-        if (!receptionReady || (hrReceipt != null && SystemClock.elapsedRealtime() - hrReceipt > 3_000L)) {
-            processor.markHeartRateUnavailable()
-        }
-        return processor.snapshot()
+        val heartRateExpired = !receptionReady || (hrReceipt != null && SystemClock.elapsedRealtime() - hrReceipt > 3_000L)
+        if (heartRateExpired && !heartRateTimedOut) processor.markHeartRateUnavailable()
+        heartRateTimedOut = heartRateExpired
     }
 
     @Synchronized
