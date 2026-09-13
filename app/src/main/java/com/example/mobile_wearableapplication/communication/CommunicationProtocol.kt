@@ -31,7 +31,32 @@ data class SensorBatch(
     val schemaVersion: Int = CommunicationProtocol.SCHEMA_VERSION
 )
 
+data class BatchAcknowledgement(val sessionId: String, val batchId: String)
+
 object CommunicationProtocol {
+
+    fun encodeAcknowledgement(ack: BatchAcknowledgement): ByteArray {
+        validateId(ack.sessionId, "sessionId")
+        validateId(ack.batchId, "batchId")
+        return JSONObject().apply {
+            put("schemaVersion", SCHEMA_VERSION)
+            put("sessionId", ack.sessionId)
+            put("batchId", ack.batchId)
+        }.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    fun decodeAcknowledgement(payload: ByteArray): Result<BatchAcknowledgement> = runCatching {
+        require(payload.isNotEmpty() && payload.size <= 1024) { "Invalid acknowledgement size" }
+        val json = JSONObject(payload.toString(Charsets.UTF_8))
+        val version = json.get("schemaVersion")
+        require(version is Int && version == SCHEMA_VERSION) { "Unsupported schema version" }
+        val sessionId = requiredString(json, "sessionId")
+        val batchId = requiredString(json, "batchId")
+        validateId(sessionId, "sessionId")
+        validateId(batchId, "batchId")
+        BatchAcknowledgement(sessionId, batchId)
+    }
+
 
     const val SCHEMA_VERSION = 1
 
