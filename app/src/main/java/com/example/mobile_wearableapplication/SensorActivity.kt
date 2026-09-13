@@ -185,6 +185,7 @@ class SensorActivity : ComponentActivity() {
             "Session resting baseline: ${metricStatus(processing.restingHeartRate)}\n" +
             "Exercise HR: ${exerciseHeartRateText(processing.exerciseHeartRate)}\n" +
             "Intensity: ${intensityText(processing.intensity)}\n" +
+            "Zone duration: ${zoneDurationText(processing.zoneDurations)}\n" +
             "Workout Recovery: ${recoveryText(processing.recovery, processing.recoveryRemainingSeconds)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
             "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
@@ -231,6 +232,13 @@ class SensorActivity : ComponentActivity() {
                     (if (r.declineBpm < 0) "\nHeart rate has not declined" else "")
             }
         }
+
+    private fun zoneDurationText(value: com.example.mobile_wearableapplication.processing.ZoneDurations?): String {
+        if (value == null) return "— (waiting for exercise)"
+        return "\nLow: %.1f s\nModerate: %.1f s\nHigh: %.1f s\nUnclassified: %.1f s\nMissing: %.1f s\nTotal: %.1f s".format(
+            value.lowSeconds, value.moderateSeconds, value.highSeconds,
+            value.unclassifiedSeconds, value.missingSeconds, value.totalSeconds)
+    }
 
     private fun metricStatus(result: MetricResult<*>): String = when (result) {
         is MetricResult.Available -> result.value.toString()

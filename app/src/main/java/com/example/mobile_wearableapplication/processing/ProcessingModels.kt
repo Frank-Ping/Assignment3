@@ -65,6 +65,7 @@ data class ProcessingSnapshot(
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
     val endedAtNanos: Long? = null,
     val recoveryRemainingSeconds: Long? = null,
+    val zoneDurations: ZoneDurations? = null,
     val acceleration: InputSummary = InputSummary(),
     val heartRate: InputSummary = InputSummary(),
     val restingHeartRate: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),

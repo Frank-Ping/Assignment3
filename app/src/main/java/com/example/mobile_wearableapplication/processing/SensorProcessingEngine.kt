@@ -11,6 +11,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private var restingCalculator = RestingHeartRateCalculator()
     private var exerciseCalculator = ExerciseHeartRateCalculator()
     private var recoveryCalculator = RecoveryCalculator()
+    private var zoneDurationCalculator = ZoneDurationCalculator()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
@@ -21,6 +22,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         restingCalculator = RestingHeartRateCalculator()
         exerciseCalculator = ExerciseHeartRateCalculator()
         recoveryCalculator = RecoveryCalculator()
+        zoneDurationCalculator = ZoneDurationCalculator()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -39,6 +41,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         restingCalculator = RestingHeartRateCalculator()
         exerciseCalculator = ExerciseHeartRateCalculator()
         recoveryCalculator = RecoveryCalculator()
+        zoneDurationCalculator = ZoneDurationCalculator()
     }
 
     @Synchronized
@@ -62,7 +65,8 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             preprocessor.accept(it)
             if (phaseAt(it.timestampNanos) == WorkoutPhase.EXERCISING) {
                 val smoothed = preprocessor.snapshot(state.exerciseStartedAt).heartRate3s?.mean
-                intensityClassifier.accept(it.timestampNanos, smoothed)
+                val confirmed = intensityClassifier.accept(it.timestampNanos, smoothed)
+                zoneDurationCalculator.record(it.timestampNanos, confirmed.zone)
             }
         }
         samples.forEach { restingCalculator.accept(it); exerciseCalculator.accept(it); recoveryCalculator.accept(it) }
@@ -122,7 +126,8 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             } == true) intensityClassifier.missing()
         val intensity = if (exercising) MetricResult.Available(intensityClassifier.snapshot(), CalculationEvidence())
             else MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
-        return state.copy(recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
+        return state.copy(zoneDurations = zoneDurationCalculator.result(state.exerciseStartedAt,
+            state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
             preprocessing.asOfWatchNanos, state.endedAtNanos),
             recoveryRemainingSeconds = recoveryCalculator.remaining(state.recoveryStartedAt, preprocessing.asOfWatchNanos, state.endedAtNanos),
             intensity = intensity, exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
@@ -134,10 +139,13 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     }
 
     @Synchronized
-    fun markHeartRateUnavailable() { intensityClassifier.missing() }
+    fun markHeartRateUnavailable() {
+        intensityClassifier.missing()
+        preprocessor.snapshot().asOfWatchNanos?.let { zoneDurationCalculator.record(it, IntensityZone.MISSING) }
+    }
 
     @Synchronized
-    fun breakContinuity() { intensityClassifier.missing(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt() }
+    fun breakContinuity() { markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt() }
 
     @Synchronized
     fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt() }
