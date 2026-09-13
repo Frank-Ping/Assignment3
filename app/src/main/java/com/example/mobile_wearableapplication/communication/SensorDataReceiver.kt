@@ -31,7 +31,7 @@ class SensorDataReceiver(
                             onSuccess = { batch ->
                                 runCatching { onBatchReceived(batch) }.fold(
                                     onSuccess = {
-                                        Log.d("SensorTransfer", "Accepted $batch")
+                                        Log.d("SensorTransfer", "Stored ${batch.dataType}: ${batch.samples.size} samples, session=${batch.sessionId}, batch=${batch.batchId}")
                                         val ack = CommunicationProtocol.encodeAcknowledgement(
                                             BatchAcknowledgement(batch.sessionId, batch.batchId)
                                         )

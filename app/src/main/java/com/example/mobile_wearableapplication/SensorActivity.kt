@@ -3,6 +3,12 @@ package com.example.mobile_wearableapplication
 import com.example.mobile_wearableapplication.communication.SensorDataReceiver
 import com.example.mobile_wearableapplication.communication.WireDataType
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import java.util.Locale
+import com.example.mobile_wearableapplication.communication.ReceivedSensorStore
+import com.example.mobile_wearableapplication.communication.ReceivedSessionSnapshot
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,6 +41,14 @@ import com.example.mobile_wearableapplication.communication.DeviceRole
 import com.example.mobile_wearableapplication.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val refreshTask = object : Runnable {
+        override fun run() {
+            refreshDiagnostics()
+            refreshHandler.postDelayed(this, 1_000L)
+        }
+    }
+    private var sessionText by mutableStateOf("No session received")
     private lateinit var receiver: SensorDataReceiver
     private var peerNodeId: String? = null
     private var transferText by mutableStateOf("No batch received")
@@ -66,14 +80,9 @@ class SensorActivity : ComponentActivity() {
         }
 
         receiver = SensorDataReceiver(this, { peerNodeId }, { batch ->
-            val sample = batch.samples.last()
-            val preview = "${batch.dataType} (${batch.source})\n" +
-                "Sequence: ${sample.sequence}\nTime: ${sample.timestampNanos}\n" +
-                if (batch.dataType == WireDataType.ACCELEROMETER) {
-                    "X: ${sample.x}  Y: ${sample.y}  Z: ${sample.z} m/s²"
-                } else "${sample.bpm} bpm"
-            if (batch.dataType == WireDataType.ACCELEROMETER) accelerationPreview = preview
-            else heartRatePreview = preview
+            val node = checkNotNull(peerNodeId)
+            ReceivedSensorStore.accept(node, batch)
+            refreshDiagnostics()
         }, { transferText = it })
 
         setContent {
@@ -83,7 +92,8 @@ class SensorActivity : ComponentActivity() {
                     connectionText = connectionText,
                     transferText = transferText,
                     accelerationPreview = accelerationPreview,
-                    heartRatePreview = heartRatePreview
+                    heartRatePreview = heartRatePreview,
+                    sessionText = sessionText
                 )
             }
         }
@@ -91,16 +101,47 @@ class SensorActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        refreshHandler.post(refreshTask)
         receiver.start()
         connectionManager.start()
     }
 
     override fun onStop() {
+        refreshHandler.removeCallbacksAndMessages(null)
         receiver.stop()
         connectionManager.stop()
         peerNodeId = null
         super.onStop()
     }
+    private fun refreshDiagnostics() {
+        val snapshot = ReceivedSensorStore.snapshot()
+        sessionText = snapshot?.let { "Session: ${it.sessionId}\nWatch: ${it.nodeId}" }
+            ?: "No session received"
+        accelerationPreview = formatStream(snapshot, WireDataType.ACCELEROMETER)
+        heartRatePreview = formatStream(snapshot, WireDataType.HEART_RATE)
+    }
+
+    private fun formatStream(snapshot: ReceivedSessionSnapshot?, type: WireDataType): String {
+        val title = if (type == WireDataType.ACCELEROMETER) "Acceleration" else "Heart rate"
+        val stream = snapshot?.streams?.get(type) ?: return "$title: waiting for data"
+        val received = stream.latest ?: return "$title: waiting for data"
+        val sample = received.sample
+        val ageMillis = (SystemClock.elapsedRealtime() -
+            checkNotNull(stream.lastNewSampleAtMillis)).coerceAtLeast(0L)
+        val freshness = if (ageMillis >= ReceivedSensorStore.STALE_AFTER_MILLIS) "Stale" else "Recent"
+        val value = if (type == WireDataType.ACCELEROMETER) {
+            String.format(Locale.US, "X: %.3f  Y: %.3f  Z: %.3f m/s^2", sample.x, sample.y, sample.z)
+        } else String.format(Locale.US, "%.1f bpm", sample.bpm)
+        val capacity = if (type == WireDataType.ACCELEROMETER) {
+            ReceivedSensorStore.ACCELERATION_CAPACITY
+        } else ReceivedSensorStore.HEART_RATE_CAPACITY
+        return "$title (${received.source})\n$value\n" +
+            "Sequence: ${sample.sequence}\nWatch timestamp: ${sample.timestampNanos} ns\n" +
+            "$freshness: last new sample received ${ageMillis / 1000}s ago\n" +
+            "Batches: ${stream.batches}; incoming samples: ${stream.receivedSamples}\n" +
+            "Stored: ${stream.history.size}/$capacity; duplicate batches: ${stream.duplicateBatches}"
+    }
+
 }
 
 @Composable
@@ -109,7 +150,8 @@ private fun SensorPage(
     connectionText: String = "Connection stopped",
     transferText: String = "No batch received",
     accelerationPreview: String = "Acceleration: --",
-    heartRatePreview: String = "Heart rate: --"
+    heartRatePreview: String = "Heart rate: --",
+    sessionText: String = "No session received"
 ) {
     Box(
         modifier = Modifier
@@ -154,7 +196,7 @@ private fun SensorPage(
             Text(heartRatePreview, color = Color.White, fontSize = 14.sp)
             Text(transferText, color = Color.LightGray, fontSize = 12.sp)
             Text(
-                text = "Manual transfer test",
+                text = "$sessionText\nRolling history in memory; receiving while this page is active.\nRecent/Stale describes receipt time, not measurement accuracy.",
                 modifier = Modifier.padding(bottom = 8.dp),
                 color = Color.Gray,
                 fontSize = 14.sp,
