@@ -39,8 +39,8 @@ data class ConfirmedPhaseEvent(
 data class ExerciseHeartRate(
     val currentBpm: Double?, val timeWeightedAverageBpm: Double?, val smoothedPeakBpm: Double?
 )
-enum class IntensityZone { BELOW_MODERATE, MODERATE, VIGOROUS, ABOVE_REFERENCE_RANGE }
-data class ExerciseIntensity(val percentage: Double, val zone: IntensityZone)
+enum class IntensityZone { LOW, MODERATE, HIGH, UNCLASSIFIED, MISSING }
+data class ExerciseIntensity(val percentage: Double?, val zone: IntensityZone, val confirmedAtNanos: Long? = null, val hrMaxBpm: Double = 200.0)
 data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double, val bpmPerMinute: Double)
 
 /** Counts describe accepted input, not calculated physiological quality. */

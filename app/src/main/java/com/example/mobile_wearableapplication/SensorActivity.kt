@@ -184,7 +184,7 @@ class SensorActivity : ComponentActivity() {
             "Heart rate: ${processing.heartRate.acceptedSamples}\n" +
             "Session resting baseline: ${metricStatus(processing.restingHeartRate)}\n" +
             "Exercise HR: ${exerciseHeartRateText(processing.exerciseHeartRate)}\n" +
-            "Intensity: ${metricStatus(processing.intensity)}\n" +
+            "Intensity: ${intensityText(processing.intensity)}\n" +
             "Recovery: ${metricStatus(processing.recovery)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
             "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
@@ -207,6 +207,16 @@ class SensorActivity : ComponentActivity() {
             is MetricResult.Available -> {
                 fun bpm(value: Double?) = value?.let { "%.1f bpm".format(it) } ?: "—"
                 "\nCurrent (3s): ${bpm(result.value.currentBpm)}\nAverage: ${bpm(result.value.timeWeightedAverageBpm)}\nPeak (smoothed): ${bpm(result.value.smoothedPeakBpm)}"
+            }
+        }
+
+    private fun intensityText(result: MetricResult<com.example.mobile_wearableapplication.processing.ExerciseIntensity>): String =
+        when (result) {
+            is MetricResult.Unavailable -> metricStatus(result)
+            is MetricResult.Available -> {
+                val value = result.value
+                val percentage = value.percentage?.let { "%.1f%%".format(it) } ?: "—"
+                "${value.zone.name.lowercase().replaceFirstChar { it.uppercase() }} ($percentage; HRmax ${value.hrMaxBpm}, demo reference)"
             }
         }
 

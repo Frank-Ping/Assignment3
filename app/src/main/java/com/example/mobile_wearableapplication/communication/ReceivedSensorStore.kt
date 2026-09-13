@@ -184,6 +184,11 @@ object ReceivedSensorStore {
         if (!receptionReady || lastReceipt == null || SystemClock.elapsedRealtime() - lastReceipt > 1_000L) {
             processor.markAccelerationUnavailable()
         }
+        val hrStream = activeSession?.let { sessions[it] }?.get(WireDataType.HEART_RATE)
+        val hrReceipt = hrStream?.lastNewSampleAtMillis
+        if (!receptionReady || (hrReceipt != null && SystemClock.elapsedRealtime() - hrReceipt > 3_000L)) {
+            processor.markHeartRateUnavailable()
+        }
         return processor.snapshot()
     }
 
