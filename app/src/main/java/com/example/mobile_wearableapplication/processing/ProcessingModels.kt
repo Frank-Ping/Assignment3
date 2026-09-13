@@ -6,7 +6,7 @@ enum class SampleSource { REAL, DEMO }
 enum class WorkoutPhase { RESTING, EXERCISING, RECOVERING }
 enum class UnavailableReason {
     NO_SESSION, AWAITING_PHASE_CONFIRMATION, NOT_IMPLEMENTED,
-    COLLECTING_BASELINE, INSUFFICIENT_DATA, INTERRUPTED_BY_MOVEMENT,
+    COLLECTING_BASELINE, COLLECTING_RECOVERY, INSUFFICIENT_DATA, INTERRUPTED_BY_MOVEMENT,
     INVALID_CONFIGURATION, STALE_DATA
 }
 
@@ -41,7 +41,9 @@ data class ExerciseHeartRate(
 )
 enum class IntensityZone { LOW, MODERATE, HIGH, UNCLASSIFIED, MISSING }
 data class ExerciseIntensity(val percentage: Double?, val zone: IntensityZone, val confirmedAtNanos: Long? = null, val hrMaxBpm: Double = 200.0)
-data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double, val bpmPerMinute: Double)
+data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double, val bpmPerMinute: Double,
+    val startEvidence: CalculationEvidence = CalculationEvidence(),
+    val endEvidence: CalculationEvidence = CalculationEvidence())
 
 /** Counts describe accepted input, not calculated physiological quality. */
 data class InputSummary(
@@ -62,6 +64,7 @@ data class ProcessingSnapshot(
     val motion: MotionResult = MotionResult(),
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
     val endedAtNanos: Long? = null,
+    val recoveryRemainingSeconds: Long? = null,
     val acceleration: InputSummary = InputSummary(),
     val heartRate: InputSummary = InputSummary(),
     val restingHeartRate: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),

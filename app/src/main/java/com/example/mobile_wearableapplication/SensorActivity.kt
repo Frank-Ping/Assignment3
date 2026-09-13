@@ -185,7 +185,7 @@ class SensorActivity : ComponentActivity() {
             "Session resting baseline: ${metricStatus(processing.restingHeartRate)}\n" +
             "Exercise HR: ${exerciseHeartRateText(processing.exerciseHeartRate)}\n" +
             "Intensity: ${intensityText(processing.intensity)}\n" +
-            "Recovery: ${metricStatus(processing.recovery)}\n" +
+            "Workout Recovery: ${recoveryText(processing.recovery, processing.recoveryRemainingSeconds)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
             "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
             "Motion: ${processing.motion.state}\n" +
@@ -217,6 +217,18 @@ class SensorActivity : ComponentActivity() {
                 val value = result.value
                 val percentage = value.percentage?.let { "%.1f%%".format(it) } ?: "—"
                 "${value.zone.name.lowercase().replaceFirstChar { it.uppercase() }} ($percentage; HRmax ${value.hrMaxBpm}, demo reference)"
+            }
+        }
+
+    private fun recoveryText(result: MetricResult<com.example.mobile_wearableapplication.processing.RecoveryRate>, remaining: Long?): String =
+        when (result) {
+            is MetricResult.Unavailable -> metricStatus(result) +
+                (if (remaining != null && remaining > 0) " ($remaining s remaining; watch sample time)" else "")
+            is MetricResult.Available -> {
+                val r = result.value
+                "\nH0: %.1f bpm; H60: %.1f bpm\nDrop: %.1f bpm\nRate: %.1f bpm/min (1-minute average decline)".format(
+                    r.startBpm, r.endBpm, r.declineBpm, r.bpmPerMinute) +
+                    (if (r.declineBpm < 0) "\nHeart rate has not declined" else "")
             }
         }
 

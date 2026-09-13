@@ -10,6 +10,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private var motionDetector = MotionDetector()
     private var restingCalculator = RestingHeartRateCalculator()
     private var exerciseCalculator = ExerciseHeartRateCalculator()
+    private var recoveryCalculator = RecoveryCalculator()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
@@ -19,6 +20,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         motionDetector = MotionDetector()
         restingCalculator = RestingHeartRateCalculator()
         exerciseCalculator = ExerciseHeartRateCalculator()
+        recoveryCalculator = RecoveryCalculator()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -36,6 +38,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         motionDetector = MotionDetector()
         restingCalculator = RestingHeartRateCalculator()
         exerciseCalculator = ExerciseHeartRateCalculator()
+        recoveryCalculator = RecoveryCalculator()
     }
 
     @Synchronized
@@ -44,6 +47,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         samples.forEach { preprocessor.accept(it) }
         samples.forEach {
             motionDetector.accept(it)
+            recoveryCalculator.observe(it.timestampNanos, motionDetector.snapshot(it.timestampNanos).motionDetected == true)
             restingCalculator.observe(it.timestampNanos, motionDetector.snapshot(it.timestampNanos).stillnessVerified == true)
         }
         state = state.copy(acceleration = summarize(
@@ -61,7 +65,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
                 intensityClassifier.accept(it.timestampNanos, smoothed)
             }
         }
-        samples.forEach { restingCalculator.accept(it); exerciseCalculator.accept(it) }
+        samples.forEach { restingCalculator.accept(it); exerciseCalculator.accept(it); recoveryCalculator.accept(it) }
         state = state.copy(heartRate = summarize(
             state.heartRate, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -118,8 +122,12 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             } == true) intensityClassifier.missing()
         val intensity = if (exercising) MetricResult.Available(intensityClassifier.snapshot(), CalculationEvidence())
             else MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
-        return state.copy(intensity = intensity, exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
+        return state.copy(recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
+            preprocessing.asOfWatchNanos, state.endedAtNanos),
+            recoveryRemainingSeconds = recoveryCalculator.remaining(state.recoveryStartedAt, preprocessing.asOfWatchNanos, state.endedAtNanos),
+            intensity = intensity, exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
             state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), restingHeartRate = restingCalculator.result(state.restingStartedAt), preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
+            movementDuringRecovery = recoveryCalculator.moved(state.recoveryStartedAt),
             stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
             heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
             accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
@@ -129,7 +137,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     fun markHeartRateUnavailable() { intensityClassifier.missing() }
 
     @Synchronized
-    fun breakContinuity() { intensityClassifier.missing(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt() }
+    fun breakContinuity() { intensityClassifier.missing(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt() }
 
     @Synchronized
     fun markAccelerationUnavailable() { motionDetector.interrupt(); restingCalculator.interrupt() }
