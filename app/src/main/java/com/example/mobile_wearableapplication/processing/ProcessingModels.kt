@@ -53,11 +53,13 @@ data class ProcessingQuality(
     val heartRateCoverageFraction: Double? = null,
     val accelerationCoverageFraction: Double? = null,
     val stillnessVerified: Boolean? = null,
+    val motionDetected: Boolean? = null,
     val movementDuringRecovery: Boolean? = null
 )
 data class ProcessingSnapshot(
     val session: ProcessingSession? = null,
     val preprocessing: PreprocessingSnapshot = PreprocessingSnapshot(),
+    val motion: MotionResult = MotionResult(),
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
     val endedAtNanos: Long? = null,
     val acceleration: InputSummary = InputSummary(),

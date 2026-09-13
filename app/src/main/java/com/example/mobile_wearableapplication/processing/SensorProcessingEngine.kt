@@ -6,11 +6,13 @@ package com.example.mobile_wearableapplication.processing
 class SensorProcessingEngine {
     private var state = ProcessingSnapshot()
     private var preprocessor = SensorPreprocessor()
+    private var motionDetector = MotionDetector()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
         if (state.session == session) return
         preprocessor = SensorPreprocessor()
+        motionDetector = MotionDetector()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -24,12 +26,14 @@ class SensorProcessingEngine {
     fun reset() {
         state = ProcessingSnapshot()
         preprocessor = SensorPreprocessor()
+        motionDetector = MotionDetector()
     }
 
     @Synchronized
     fun acceptAcceleration(session: ProcessingSession, samples: List<AccelerationInput>) {
         if (session != state.session || samples.isEmpty()) return
         samples.forEach { preprocessor.accept(it) }
+        samples.forEach { motionDetector.accept(it) }
         state = state.copy(acceleration = summarize(
             state.acceleration, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -60,7 +64,10 @@ class SensorProcessingEngine {
 
     @Synchronized
     fun endSession(session: ProcessingSession, watchElapsedTimeNanos: Long) {
-        if (session == state.session) state = state.copy(endedAtNanos = watchElapsedTimeNanos)
+        if (session == state.session) {
+            state = state.copy(endedAtNanos = watchElapsedTimeNanos)
+            motionDetector.interrupt()
+        }
     }
 
     /** Resolve delayed samples by watch measurement time, not the current UI phase. */
@@ -73,13 +80,18 @@ class SensorProcessingEngine {
     @Synchronized
     fun snapshot(): ProcessingSnapshot {
         val preprocessing = preprocessor.snapshot()
-        return state.copy(preprocessing = preprocessing, quality = state.quality.copy(
+        val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot(preprocessing.asOfWatchNanos)
+        return state.copy(preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
+            stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
             heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
             accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
     }
 
     @Synchronized
-    fun breakContinuity() { preprocessor.breakContinuity() }
+    fun breakContinuity() { preprocessor.breakContinuity(); motionDetector.interrupt() }
+
+    @Synchronized
+    fun markAccelerationUnavailable() { motionDetector.interrupt() }
 
     private fun summarize(previous: InputSummary, timestamps: List<Long>, sources: List<SampleSource>) =
         InputSummary(

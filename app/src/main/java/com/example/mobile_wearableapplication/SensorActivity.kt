@@ -188,6 +188,8 @@ class SensorActivity : ComponentActivity() {
             "Recovery: ${metricStatus(processing.recovery)}\n" +
             "Workout state: ${metricStatus(processing.workoutState)}\n" +
             "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
+            "Motion: ${processing.motion.state}\n" +
+            "stillnessVerified: ${processing.quality.stillnessVerified ?: "Unknown"}; motionDetected: ${processing.quality.motionDetected ?: "Unknown"}\n" +
             "Preprocessing (as of watch sample time)\n" +
             "${if (!reception.ready || reception.sessionLifecycle != SessionLifecycle.RUNNING) "Historical / reception paused\n" else ""}" +
             "Last valid raw HR (may be historical): ${preprocessing.rawHeartRateBpm ?: "—"}\n" +
