@@ -56,8 +56,7 @@ class MotionDetector(private val stillThreshold: Double = 0.3, private val motio
                 1.0, points.map { it.source }.toSet())))
     }
 
-    fun snapshot(asOfWatchNanos: Long?): MotionResult {
-        if (asOfWatchNanos != null && lastTime >= 0 && asOfWatchNanos - lastTime > SensorPreprocessor.ACCELERATION_HOLD_NANOS) interrupt()
-        return result
-    }
+    // Measurement gaps are checked in accept(); receipt timeouts call interrupt().
+    // Other sensor timestamps must not invalidate a pending accelerometer batch.
+    fun snapshot(): MotionResult = result
 }

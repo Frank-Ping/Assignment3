@@ -50,8 +50,8 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         samples.forEach { preprocessor.accept(it) }
         samples.forEach {
             motionDetector.accept(it)
-            recoveryCalculator.observe(it.timestampNanos, motionDetector.snapshot(it.timestampNanos).motionDetected)
-            restingCalculator.observe(it.timestampNanos, motionDetector.snapshot(it.timestampNanos).stillnessVerified == true)
+            recoveryCalculator.observe(it.timestampNanos, motionDetector.snapshot().motionDetected)
+            restingCalculator.observe(it.timestampNanos, motionDetector.snapshot().stillnessVerified == true)
         }
         state = state.copy(acceleration = summarize(
             state.acceleration, samples.map { it.timestampNanos }, samples.map { it.source }
@@ -119,7 +119,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     @Synchronized
     fun snapshot(): ProcessingSnapshot {
         val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
-        val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot(preprocessing.asOfWatchNanos)
+        val motion = if (state.endedAtNanos != null) MotionResult() else motionDetector.snapshot()
         val exercising = state.exerciseStartedAt != null && state.recoveryStartedAt == null && state.endedAtNanos == null
         if (exercising && preprocessing.asOfWatchNanos?.let { now ->
                 now - (state.heartRate.latestTimestampNanos ?: state.exerciseStartedAt!!) > SensorPreprocessor.HEART_RATE_HOLD_NANOS
