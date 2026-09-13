@@ -115,24 +115,6 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
             }
         }
         val dash = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
-        if (kind == "HR" && offset != null) {
-            val events = processing.chartOutput.phases.mapIndexed { index, phase ->
-                phase.watchElapsedTimeNanos to "${index + 1}"
-            } + listOfNotNull(processing.recoveryStartedAt?.let { (it + 60_000_000_000L) to "+60s" })
-            var previousEventEnd = -Float.MAX_VALUE
-            events.forEach { (time, name) ->
-                val wall = time / 1_000_000L + offset
-                if (wall in start..now) {
-                    val eventX = left + ((wall - start).toDouble() / hourMillis * step).toFloat()
-                    drawLine(Color.Gray, Offset(eventX, top), Offset(eventX, bottom), 1.dp.toPx(), pathEffect = dash)
-                    val labelX = eventX.coerceAtMost(right - paint.measureText(name))
-                    if (labelX >= previousEventEnd + 5.dp.toPx()) {
-                        label(name, labelX, top - 4.dp.toPx())
-                        previousEventEnd = labelX + paint.measureText(name)
-                    }
-                }
-            }
-        }
         clipRect(left, top, right, bottom) {
             if (stacked) {
                 for (i in 0..11) {
@@ -154,7 +136,23 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
                 val references = if (kind == "RMS") listOf(0.3, 0.8)
                     else listOfNotNull((processing.restingHeartRate as? MetricResult.Available)?.value)
                 references.forEach { value ->
-                    if (value in low..high) drawLine(colors[1], Offset(left, y(value)), Offset(right, y(value)), 1.dp.toPx(), pathEffect = dash)
+                    if (value in low..high) {
+                        drawLine(colors[1], Offset(left, y(value)), Offset(right, y(value)), 1.dp.toPx(), pathEffect = dash)
+                        if (kind == "HR") {
+                            val referencePaint = Paint(paint).apply { color = android.graphics.Color.rgb(255, 209, 102) }
+                            val text = "Resting Heart Rate"
+                            val inset = 4.dp.toPx()
+                            val availableWidth = right - left - 2 * inset
+                            if (availableWidth > 0) {
+                                if (referencePaint.measureText(text) > availableWidth)
+                                    referencePaint.textSize *= availableWidth / referencePaint.measureText(text)
+                                val baseline = if (y(value) - inset + referencePaint.ascent() >= top)
+                                    y(value) - inset else y(value) + inset - referencePaint.ascent()
+                                drawContext.canvas.nativeCanvas.drawText(text,
+                                    right - inset - referencePaint.measureText(text), baseline, referencePaint)
+                            }
+                        }
+                    }
                 }
             }
         }

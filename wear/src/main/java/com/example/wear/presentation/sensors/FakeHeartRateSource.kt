@@ -31,6 +31,11 @@ class FakeHeartRateSource(
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            com.example.wear.presentation.DemoControl.heartRateFault?.let {
+                statusCallback?.invoke(it)
+                handler.postDelayed(this, 1_000L)
+                return
+            }
             val current = phase()
             if (current == null) {
                 statusCallback?.invoke(SensorStatus.WAITING_FOR_DATA)

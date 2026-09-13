@@ -159,7 +159,7 @@ class SensorActivity : ComponentActivity() {
 
     private lateinit var connectionManager: WearConnectionManager
 
-    private var connectionText by mutableStateOf("Connection stopped")
+    private var connectionText by mutableStateOf("Not Started")
 
     private var pageStarted = false
     private var lastHeartRateStatus: SensorStatus? = null
@@ -196,7 +196,7 @@ class SensorActivity : ComponentActivity() {
             if (peerNodeId != nextPeer && ::sessionTransport.isInitialized) sessionTransport.peerChanged()
             peerNodeId = nextPeer
             connectionText = when (info.status) {
-                ConnectionStatus.STOPPED -> "Connection stopped"
+                ConnectionStatus.STOPPED -> "Not Started"
                 ConnectionStatus.SEARCHING -> "Searching for phone"
                 ConnectionStatus.DISCONNECTED -> "Phone disconnected"
                 ConnectionStatus.WAITING_FOR_APP -> "Waiting for phone app"
@@ -412,8 +412,8 @@ class SensorActivity : ComponentActivity() {
         batcher.stop()
         accelerationStatus = SensorStatus.STOPPED
         heartRateStatus = SensorStatus.STOPPED
-        heartRateText = "-- bpm (stopped)"
-        accelerationText = "X: --\nY: --\nZ: -- (stopped)"
+        heartRateText = "-- bpm"
+        accelerationText = "X: --\nY: --\nZ: --"
     }
 
     private fun requestHeartRateCollection() {
@@ -502,7 +502,8 @@ class SensorActivity : ComponentActivity() {
                 if (status == SensorStatus.ACTIVE) {
                     Box(Modifier.size(6.dp).background(Color(0xFF00DD88), RoundedCornerShape(50)))
                 }
-                Text(status.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() },
+                Text(if (status == SensorStatus.STOPPED || status == SensorStatus.NOT_STARTED) "Not Started"
+                    else status.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() },
                     color = Color.LightGray,
                     fontSize = 9.sp, lineHeight = 11.sp, textAlign = TextAlign.Center)
             }

@@ -21,6 +21,11 @@ class FakeAccelerometerSource : AccelerometerSource {
         val tick = object : Runnable {
             override fun run() {
                 if (!running) return
+                com.example.wear.presentation.DemoControl.accelerationFault?.let {
+                    onStatusChanged(it)
+                    handler.postDelayed(this, 40L)
+                    return
+                }
                 val now = SystemClock.elapsedRealtimeNanos()
                 val seconds = (now - started) / 1e9
                 val moving = seconds >= 35 && seconds < 95

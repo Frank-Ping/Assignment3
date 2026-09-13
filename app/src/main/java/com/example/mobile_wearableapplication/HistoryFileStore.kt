@@ -10,8 +10,10 @@ import java.util.concurrent.Executors
 
 internal data class StoredHour(val time: Long, val source: String, val sum: Double, val count: Long, val zones: List<Double>)
 internal data class StoredSummary(val ended: Long, val baseline: Double?, val recovery: Double?, val recoveryQuality: String = "UNKNOWN")
+internal data class StoredMetric(val value: Double, val savedAt: Long?)
 internal data class StoredHistory(val hours: List<StoredHour> = emptyList(), val summary: StoredSummary? = null,
-    val error: String? = null, val ready: Boolean = false)
+    val error: String? = null, val ready: Boolean = false,
+    val baseline: StoredMetric? = null, val recovery: StoredMetric? = null)
 
 /** One process-wide serial writer. ADB previews never enter this store. */
 internal object HistoryFileStore {
@@ -22,6 +24,7 @@ internal object HistoryFileStore {
         private set
     private var lastSave = 0L
     private var writable = true
+    private val pendingMetrics = mutableSetOf<String>()
     @Synchronized fun open(context: Context) {
         if (file != null) return
         file = AtomicFile(File(context.applicationContext.filesDir, "sensor_history.json"))
@@ -29,6 +32,20 @@ internal object HistoryFileStore {
             try {
                 if (file!!.baseFile.exists() || File(file!!.baseFile.path + ".bak").exists()) root = JSONObject(file!!.openRead().bufferedReader().use { it.readText() })
                 require(root.getInt("version") == 1)
+                // Older files have no trustworthy per-metric save time. Retain values without inventing one.
+                if (!root.has("latestMetrics")) {
+                    val latest = JSONObject()
+                    val sessions = root.getJSONObject("sessions")
+                    sessions.keys().asSequence().toList().sortedBy { sessions.getJSONObject(it).optLong("updated") }.forEach { key ->
+                        val summary = sessions.getJSONObject(key).optJSONObject("summary")
+                        listOf("baseline", "recovery").forEach { name ->
+                            summary?.optJSONObject(name)?.takeIf { it.optBoolean("valid") }?.let {
+                                latest.put(name, JSONObject(it.toString()).put("session", key))
+                            }
+                        }
+                    }
+                    root.put("latestMetrics", latest)
+                }
                 publish()
             } catch (e: Exception) {
                 writable = false // Preserve an unreadable file rather than overwrite it.
@@ -93,22 +110,52 @@ internal object HistoryFileStore {
                             }
                         }
                     }
-                    processing.finalSummary?.let { summary ->
-                        completed = !data.has("ended")
+                    // Persist current metrics before completion; final values take precedence.
+                    run {
+                        val summary = processing.finalSummary
+                        val restingResult = summary?.restingHeartRate ?: processing.restingHeartRate
+                        val recoveryResult = summary?.recovery ?: processing.recovery
                         fun metric(result: MetricResult<*>): JSONObject = when (result) {
                             is MetricResult.Available -> JSONObject().put("valid", true)
                                 .put("sources", JSONArray(result.evidence.sources.map { it.name }))
+                                .put("windowEndNanos", result.evidence.window?.endNanos ?: JSONObject.NULL)
                             is MetricResult.Unavailable -> JSONObject().put("valid", false).put("reason", result.reason.name)
                         }
-                        val baseline = metric(summary.restingHeartRate)
-                        (summary.restingHeartRate as? MetricResult.Available)?.let { baseline.put("bpm", it.value) }
-                        val recovery = metric(summary.recovery)
-                        (summary.recovery as? MetricResult.Available)?.value?.let {
+                        val baseline = metric(restingResult)
+                        (restingResult as? MetricResult.Available)?.let { baseline.put("bpm", it.value) }
+                        val recovery = metric(recoveryResult)
+                        recovery.put("remainingSeconds", processing.recoveryRemainingSeconds ?: JSONObject.NULL)
+                        (recoveryResult as? MetricResult.Available)?.value?.let {
                             recovery.put("startBpm", it.startBpm).put("endBpm", it.endBpm)
                                 .put("quality", it.quality.name).put("declineBpm", it.declineBpm).put("bpmPerMinute", it.bpmPerMinute)
                         }
-                        data.put("ended", summary.endedAtNanos / 1_000_000L + anchor)
-                        data.put("summary", JSONObject().put("baseline", baseline).put("recovery", recovery))
+                        if (summary != null) {
+                            completed = !data.has("ended")
+                            data.put("ended", summary.endedAtNanos / 1_000_000L + anchor)
+                        }
+                        val latest = root.getJSONObject("latestMetrics")
+                        fun retain(name: String, current: JSONObject): JSONObject {
+                            if (current.optBoolean("valid")) {
+                                val candidate = JSONObject(current.toString()).put("session", key)
+                                candidate.remove("remainingSeconds")
+                                val old = latest.optJSONObject(name)
+                                // Frozen results must not acquire a new time on every periodic write.
+                                val unchanged = old != null && candidate.keys().asSequence().all {
+                                    candidate.opt(it)?.toString() == old.opt(it)?.toString()
+                                }
+                                if (!unchanged) {
+                                    latest.put(name, candidate)
+                                    pendingMetrics.add(name)
+                                }
+                                return current
+                            }
+                            return data.optJSONObject("summary")?.optJSONObject(name)
+                                ?.takeIf { it.optBoolean("valid") } ?: current
+                        }
+                        val retainedBaseline = retain("baseline", baseline)
+                        val retainedRecovery = retain("recovery", recovery)
+                        data.put("summary", JSONObject().put("baseline", retainedBaseline).put("recovery", retainedRecovery)
+                            .put("complete", summary != null).put("updated", now))
                     }
                     data.put("updated", now)
                 }
@@ -122,12 +169,14 @@ internal object HistoryFileStore {
                     }
                     if (data.optLong("updated") < cutoff) sessions.remove(key)
                 }
-                if (force || completed || now - lastSave >= 10_000L) {
+                if (force || completed || now - lastSave >= 20_000L) {
+                    pendingMetrics.forEach { root.getJSONObject("latestMetrics").getJSONObject(it).put("savedAt", now) }
                     val stream = file!!.startWrite()
                     try { stream.write(root.toString().toByteArray(Charsets.UTF_8)); file!!.finishWrite(stream); lastSave = now }
                     catch (e: Exception) { file!!.failWrite(stream); throw e }
+                    pendingMetrics.clear()
+                    publish()
                 }
-                publish()
             } catch (e: Exception) { snapshot = snapshot.copy(error = "History save failed: ${e.message}") }
         }
     }
@@ -155,6 +204,13 @@ internal object HistoryFileStore {
                 summary = StoredSummary(ended, value("baseline", "bpm"), value("recovery", "declineBpm"), saved.getJSONObject("recovery").optString("quality", "UNKNOWN"))
             }
         }
-        snapshot = StoredHistory(rows, summary, ready = true)
+        fun latest(name: String, field: String): StoredMetric? {
+            val metric = root.optJSONObject("latestMetrics")?.optJSONObject(name) ?: return null
+            val value = metric.optDouble(field)
+            if (!metric.optBoolean("valid") || !value.isFinite()) return null
+            return StoredMetric(value, metric.optLong("savedAt").takeIf { it > 0 })
+        }
+        snapshot = StoredHistory(rows, summary, ready = true,
+            baseline = latest("baseline", "bpm"), recovery = latest("recovery", "declineBpm"))
     }
 }

@@ -246,6 +246,9 @@ class SensorActivity : ComponentActivity() {
             else -> "3-second smoothed HR"
         }
         fun bpm(value: Double?) = value?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
+        fun integerBpm(value: Double) = String.format(Locale.US, "%.0f bpm", value)
+        fun savedTime(metric: StoredMetric?) = if (historyPreview == null && metric?.savedAt != null)
+            java.text.SimpleDateFormat("MM/dd HH:mm", Locale.US).format(java.util.Date(metric.savedAt)) else "—"
         val injectedHr = HistoryPreviewStore.heartRate
         val injectedFresh = injectedHr != null && SystemClock.elapsedRealtime() - injectedHr.receivedAtMillis <= 3_000L
         overview = mapOf(
@@ -270,11 +273,11 @@ class SensorActivity : ComponentActivity() {
                     else "Retained exercise statistics · Peak: smoothed"
             },
             "intensityZone" to (if (exercising) intensity?.zone?.name.orEmpty() else ""),
-            "savedTime" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
-                java.text.SimpleDateFormat("MM/dd HH:mm", Locale.US).format(java.util.Date(storedHistory.summary!!.ended)) else "",
-            "baseline" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
-                (storedHistory.summary!!.baseline?.let { bpm(it) } ?: "— unavailable") else when (val result = historyPreview?.processing?.restingHeartRate ?: processing.restingHeartRate) {
-                is MetricResult.Available -> bpm(result.value)
+            "baselineTime" to savedTime(storedHistory.baseline),
+            "recoveryTime" to savedTime(storedHistory.recovery),
+            "baseline" to if (historyPreview == null && storedHistory.baseline != null)
+                integerBpm(storedHistory.baseline!!.value) else when (val result = historyPreview?.processing?.restingHeartRate ?: processing.restingHeartRate) {
+                is MetricResult.Available -> if (historyPreview != null) integerBpm(result.value) else "— waiting for save"
                 is MetricResult.Unavailable -> metricStatus(result)
             },
             "baselineState" to when {
@@ -284,14 +287,11 @@ class SensorActivity : ComponentActivity() {
                 processing.restingHeartRate is MetricResult.Available -> "Valid resting baseline"
                 else -> "Requires 30 seconds of stillness and sufficient HR data"
             },
-            "recovery" to if (processing.session == null && storedHistory.summary != null && historyPreview == null)
-                (storedHistory.summary!!.recovery?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "— unavailable") else when (val result = historyPreview?.processing?.recovery ?: processing.recovery) {
-                is MetricResult.Available -> String.format(Locale.US, "%.1f bpm", result.value.declineBpm)
+            "recovery" to if (historyPreview == null && storedHistory.recovery != null)
+                integerBpm(storedHistory.recovery!!.value) else when (val result = historyPreview?.processing?.recovery ?: processing.recovery) {
+                is MetricResult.Available -> if (historyPreview != null) integerBpm(result.value.declineBpm) else "— waiting for save"
                 is MetricResult.Unavailable -> metricStatus(result)
             },
-            "recoveryQualityLabel" to if (processing.session == null && historyPreview == null)
-                storedHistory.summary?.recoveryQuality.orEmpty() else
-                ((historyPreview?.processing?.recovery ?: processing.recovery) as? MetricResult.Available)?.value?.quality?.name.orEmpty(),
             "details" to recoveryText(processing.recovery, processing.recoveryRemainingSeconds),
             "historyStatus" to when {
                 processing.session == null -> "No session data"
@@ -508,13 +508,7 @@ private fun SensorPage(
                     Surface(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(14.dp), color = Color(0xFF252323)) {
                         Column(Modifier.padding(10.dp * scale), verticalArrangement = Arrangement.spacedBy(4.dp * scale)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(overview["savedTime"].orEmpty().ifEmpty { time }, color = Color.LightGray, fontSize = (10 * scale).sp)
-                                if (key == "recovery") Text(when (overview["recoveryQualityLabel"]) {
-                                    "GOOD" -> "Good Quality"
-                                    "LOW_QUALITY" -> "Low Quality"
-                                    "UNKNOWN" -> "Quality Unknown"
-                                    else -> ""
-                                }, color = Color.LightGray, fontSize = (8 * scale).sp)
+                                Text(overview["${key}Time"].orEmpty().ifEmpty { "—" }, color = Color.LightGray, fontSize = (10 * scale).sp)
                             }
                             Row(Modifier.fillMaxWidth().height(34.dp * scale),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -531,9 +525,12 @@ private fun SensorPage(
                                 value(key).contains("unknown") -> "Motion Unknown"
                                 else -> "Unavailable"
                             } else displayTitle(value(key)), color = if (unavailable) Color.LightGray else Color.White,
-                                fontSize = ((if (unavailable) 9 else 20) * scale).sp,
-                                lineHeight = ((if (unavailable) 11 else 24) * scale).sp,
-                                modifier = Modifier.fillMaxWidth(), softWrap = true)
+                                fontSize = ((if (unavailable) 9 else 24) * scale).sp,
+                                lineHeight = ((if (unavailable) 11 else 28) * scale).sp,
+                                fontWeight = if (unavailable) FontWeight.Normal else FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(), softWrap = false)
                         }
                     }
                 }
