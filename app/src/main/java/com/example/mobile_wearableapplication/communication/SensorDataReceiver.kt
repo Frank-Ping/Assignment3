@@ -1,5 +1,9 @@
 package com.example.mobile_wearableapplication.communication
 
+import com.example.shared.communication.SensorBatch
+import com.example.shared.communication.BatchAcknowledgement
+import com.example.shared.communication.CommunicationProtocol
+
 import android.content.Context
 import android.os.Handler
 import android.os.Looper

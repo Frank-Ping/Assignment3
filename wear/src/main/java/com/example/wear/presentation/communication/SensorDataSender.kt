@@ -1,5 +1,8 @@
 package com.example.wear.presentation.communication
 
+import com.example.shared.communication.SensorBatch
+import com.example.shared.communication.CommunicationProtocol
+
 import android.content.Context
 import android.os.Handler
 import android.os.Looper

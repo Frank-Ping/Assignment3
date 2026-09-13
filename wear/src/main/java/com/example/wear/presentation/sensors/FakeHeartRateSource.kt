@@ -3,7 +3,7 @@ package com.example.wear.presentation.sensors
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import com.example.wear.presentation.communication.SessionPhase
+import com.example.shared.communication.SessionPhase
 import com.example.wear.presentation.data.HeartRateRecord
 import com.example.wear.presentation.data.HeartRateSourceType
 import com.example.wear.presentation.data.SensorStatus

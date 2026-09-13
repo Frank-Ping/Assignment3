@@ -1,5 +1,13 @@
 package com.example.wear.presentation.communication
 
+import com.example.shared.communication.SessionAction
+import com.example.shared.communication.SessionPhase
+import com.example.shared.communication.SessionLifecycle
+import com.example.shared.communication.PhaseTransition
+import com.example.shared.communication.SessionState
+import com.example.shared.communication.SessionCommand
+import com.example.shared.communication.SessionReply
+
 import java.util.UUID
 
 /** Watch owns phase times. No Android dependency; foreground owner supplies clock. */

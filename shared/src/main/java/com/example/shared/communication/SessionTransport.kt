@@ -1,4 +1,4 @@
-package com.example.mobile_wearableapplication.communication
+package com.example.shared.communication
 
 import android.content.Context
 import android.os.Handler

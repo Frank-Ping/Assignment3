@@ -1,5 +1,13 @@
 package com.example.mobile_wearableapplication.communication
 
+import com.example.shared.communication.CommunicationProtocol
+import com.example.shared.communication.SessionAction
+import com.example.shared.communication.SessionLifecycle
+import com.example.shared.communication.SessionState
+import com.example.shared.communication.SessionCommand
+import com.example.shared.communication.SessionProtocol
+import com.example.shared.communication.SessionTransport
+
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -40,8 +48,9 @@ class PhoneSessionClient(
                 } else {
                     lastStateNode = node
                     onState(node, reply.state)
+                    val replyError = reply.error
                     val message = when {
-                        reply.error != null -> reply.error
+                        replyError != null -> replyError
                         reply.state.lifecycle == SessionLifecycle.INTERRUPTED -> "Watch collection interrupted; start a new session"
                         reply.state.lifecycle == SessionLifecycle.ENDED -> "Session ended; collection stopped"
                         else -> "Watch confirmed"

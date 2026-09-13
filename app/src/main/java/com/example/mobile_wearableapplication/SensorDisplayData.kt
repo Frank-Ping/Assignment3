@@ -1,5 +1,8 @@
 package com.example.mobile_wearableapplication
 
+import com.example.shared.communication.WireDataType
+import com.example.shared.communication.SessionLifecycle
+
 import android.os.SystemClock
 import com.example.mobile_wearableapplication.communication.*
 import com.example.mobile_wearableapplication.processing.*

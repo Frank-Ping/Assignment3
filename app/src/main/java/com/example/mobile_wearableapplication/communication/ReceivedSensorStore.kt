@@ -1,5 +1,12 @@
 package com.example.mobile_wearableapplication.communication
 
+import com.example.shared.communication.WireDataType
+import com.example.shared.communication.WireSource
+import com.example.shared.communication.WireSample
+import com.example.shared.communication.SensorBatch
+import com.example.shared.communication.SessionLifecycle
+import com.example.shared.communication.SessionState
+
 import android.os.SystemClock
 import java.util.TreeMap
 import com.example.mobile_wearableapplication.processing.AccelerationInput

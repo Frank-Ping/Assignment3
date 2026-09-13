@@ -1,7 +1,10 @@
 package com.example.mobile_wearableapplication
 
+import com.example.shared.communication.SessionAction
+import com.example.shared.communication.SessionLifecycle
+
 import com.example.mobile_wearableapplication.communication.SensorDataReceiver
-import com.example.mobile_wearableapplication.communication.WireDataType
+import com.example.shared.communication.WireDataType
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,9 +49,9 @@ import com.example.mobile_wearableapplication.ui.theme.MobileWearableApplication
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.example.mobile_wearableapplication.communication.ConnectionStatus
-import com.example.mobile_wearableapplication.communication.DeviceRole
-import com.example.mobile_wearableapplication.communication.WearConnectionManager
+import com.example.shared.communication.ConnectionStatus
+import com.example.shared.communication.DeviceRole
+import com.example.shared.communication.WearConnectionManager
 import com.example.mobile_wearableapplication.processing.MetricResult
 import com.example.mobile_wearableapplication.processing.ProcessingSnapshot
 

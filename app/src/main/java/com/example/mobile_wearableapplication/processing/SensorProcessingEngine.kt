@@ -23,15 +23,7 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         if (state.session == session) return
         previousSummary = finalSummary ?: previousSummary
         finalSummary = null
-        chartBuffer = ChartBuffer()
-        intensityClassifier.reset()
-        preprocessor = SensorPreprocessor()
-        motionDetector = MotionDetector()
-        automaticDetector = AutomaticWorkoutDetector(hrMaxBpm)
-        restingCalculator = RestingHeartRateCalculator()
-        exerciseCalculator = ExerciseHeartRateCalculator()
-        recoveryCalculator = RecoveryCalculator()
-        zoneDurationCalculator = ZoneDurationCalculator()
+        resetCalculators()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
@@ -46,8 +38,14 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     fun reset() {
         previousSummary = finalSummary ?: previousSummary
         finalSummary = null
-        chartBuffer = ChartBuffer()
         state = ProcessingSnapshot()
+        resetCalculators()
+        publish()
+    }
+
+    /** Called by synchronized session operations; does not change session or summary state. */
+    private fun resetCalculators() {
+        chartBuffer = ChartBuffer()
         intensityClassifier.reset()
         preprocessor = SensorPreprocessor()
         motionDetector = MotionDetector()
@@ -56,7 +54,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         exerciseCalculator = ExerciseHeartRateCalculator()
         recoveryCalculator = RecoveryCalculator()
         zoneDurationCalculator = ZoneDurationCalculator()
-        publish()
     }
 
     @Synchronized

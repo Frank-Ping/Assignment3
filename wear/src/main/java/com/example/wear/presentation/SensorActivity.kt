@@ -1,5 +1,13 @@
 package com.example.wear.presentation
 
+import com.example.shared.communication.WireSource
+import com.example.shared.communication.CommunicationProtocol
+import com.example.shared.communication.SessionPhase
+import com.example.shared.communication.SessionLifecycle
+import com.example.shared.communication.SessionReply
+import com.example.shared.communication.SessionProtocol
+import com.example.shared.communication.SessionTransport
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Image
@@ -52,9 +60,9 @@ import com.example.wear.presentation.sensors.HealthServicesHeartRateSource
 import com.example.wear.presentation.sensors.FakeHeartRateSource
 import com.example.wear.presentation.sensors.HeartRateDemoScenario
 import com.example.wear.presentation.data.HeartRateSourceType
-import com.example.wear.presentation.communication.ConnectionStatus
-import com.example.wear.presentation.communication.DeviceRole
-import com.example.wear.presentation.communication.WearConnectionManager
+import com.example.shared.communication.ConnectionStatus
+import com.example.shared.communication.DeviceRole
+import com.example.shared.communication.WearConnectionManager
 
 class SensorActivity : ComponentActivity() {
     private lateinit var sessionTransport: SessionTransport

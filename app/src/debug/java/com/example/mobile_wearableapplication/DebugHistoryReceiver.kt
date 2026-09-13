@@ -1,5 +1,7 @@
 package com.example.mobile_wearableapplication
 
+import com.example.shared.communication.SessionAction
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent

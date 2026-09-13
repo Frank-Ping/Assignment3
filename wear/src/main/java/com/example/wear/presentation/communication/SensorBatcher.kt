@@ -1,5 +1,11 @@
 package com.example.wear.presentation.communication
 
+import com.example.shared.communication.WireDataType
+import com.example.shared.communication.WireSource
+import com.example.shared.communication.WireSample
+import com.example.shared.communication.SensorBatch
+import com.example.shared.communication.CommunicationProtocol
+
 import android.os.Handler
 import android.os.Looper
 import com.example.wear.presentation.data.AccelerometerRecord

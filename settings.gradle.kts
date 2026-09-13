@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "Mobile-Wearable Application"
 include(":app")
 include(":wear")
+include(":shared")
