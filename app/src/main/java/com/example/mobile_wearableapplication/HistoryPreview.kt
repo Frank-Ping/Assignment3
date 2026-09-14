@@ -1,7 +1,5 @@
 package com.example.mobile_wearableapplication
 
-import com.example.shared.communication.SessionAction
-
 import com.example.mobile_wearableapplication.processing.ProcessingSnapshot
 
 internal data class HistoryPreview(val processing: ProcessingSnapshot, val epochOffsetMillis: Long)

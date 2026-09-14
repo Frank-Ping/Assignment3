@@ -11,20 +11,18 @@ import android.util.Log
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.Wearable
 
-class SensorDataSender(context: Context, private val reportStatus: (String) -> Unit) {
+class SensorDataSender(context: Context) {
     private val client = Wearable.getMessageClient(context.applicationContext)
     private val handler = Handler(Looper.getMainLooper())
     private var listener: MessageClient.OnMessageReceivedListener? = null
     private var generation = 0
     private var ready = false
     private var encoder = Executors.newSingleThreadExecutor()
-    private var unconfirmed = 0L
     private val pending = mutableMapOf<Pair<String, String>, String>()
 
     fun start() {
         if (listener != null) return
         if (encoder.isShutdown) encoder = Executors.newSingleThreadExecutor()
-        unconfirmed = 0
         val token = ++generation
         val callback = MessageClient.OnMessageReceivedListener { event ->
             handler.post {
@@ -55,10 +53,10 @@ class SensorDataSender(context: Context, private val reportStatus: (String) -> U
     }
 
     // Called on the main thread; only JSON encoding runs on the worker.
-    fun sendBatch(nodeId: String, batch: SensorBatch): Boolean {
-        if (!ready || pending.size >= 10) return false
+    fun sendBatch(nodeId: String, batch: SensorBatch) {
+        if (!ready || pending.size >= 10) return
         val key = batch.sessionId to batch.batchId
-        if (key in pending) return false
+        if (key in pending) return
         val token = generation
         pending[key] = nodeId
         encoder.execute {
@@ -69,7 +67,6 @@ class SensorDataSender(context: Context, private val reportStatus: (String) -> U
                     Log.d("SensorTransfer", "Sending ${batch.dataType}: ${batch.samples.size} samples, batch=${batch.batchId}")
                     val timeout = Runnable {
                         if (token == generation && pending.remove(key) != null) {
-                            unconfirmed++
                             report("ACK timeout; delivery unknown")
                         }
                     }
@@ -80,18 +77,15 @@ class SensorDataSender(context: Context, private val reportStatus: (String) -> U
                         }.addOnFailureListener {
                             handler.removeCallbacks(timeout)
                             if (token == generation && pending.remove(key) != null) {
-                                unconfirmed++
                                 report("Send failed: ${it.message}")
                             }
                         }
                 }, onFailure = {
                     pending.remove(key)
-                    unconfirmed++
                     report("Encoding failed: ${it.message}")
                 })
             }
         }
-        return true
     }
 
     fun stop() {
@@ -108,6 +102,5 @@ class SensorDataSender(context: Context, private val reportStatus: (String) -> U
 
     private fun report(message: String) {
         Log.d("SensorTransfer", message)
-        reportStatus("$message\nPending: ${pending.size}; unconfirmed/failed: $unconfirmed")
     }
 }

@@ -8,8 +8,6 @@ import com.example.shared.communication.SessionReply
 import com.example.shared.communication.SessionProtocol
 import com.example.shared.communication.SessionTransport
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -23,8 +21,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalDensity
 import com.example.wear.R
 import java.util.Date
-import com.example.wear.presentation.communication.SensorBatcher
-import com.example.wear.presentation.communication.SensorDataSender
 import android.os.Bundle
 import android.os.SystemClock
 import android.os.Handler
@@ -33,9 +29,6 @@ import com.example.wear.presentation.communication.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -68,7 +61,6 @@ class SensorActivity : ComponentActivity() {
     private lateinit var sessionTransport: SessionTransport
     private var phaseText by mutableStateOf("Not Started")
     private var clockText by mutableStateOf("")
-    private var sessionMessage by mutableStateOf("Waiting for phone command")
     private var collecting by mutableStateOf(false)
     private var collectionGeneration = 0
     private val pageOwner = Any()
@@ -114,23 +106,6 @@ class SensorActivity : ComponentActivity() {
     private fun receiveSession(node: String, path: String, bytes: ByteArray) {
         if (!pageStarted || activePageOwner !== pageOwner) return
         val reply = when (path) {
-            CommunicationProtocol.SOURCE_COMMAND_PATH -> {
-                require(bytes.size in 1..1024)
-                val request = org.json.JSONObject(bytes.toString(Charsets.UTF_8))
-                val id = request.getString("requestId")
-                require(id.isNotBlank() && id.length <= 128)
-                val source = HeartRateSourceType.valueOf(request.getString("source"))
-                val state = sessionController.state
-                val sessionId = if (request.isNull("sessionId")) null else request.getString("sessionId")
-                val accepted = !collecting && state.lifecycle != SessionLifecycle.RUNNING &&
-                    state.revision == request.getLong("revision") && state.sessionId == sessionId
-                if (accepted) {
-                    selectedSource = source
-                    heartRateText = "-- bpm"
-                    heartRateStatus = SensorStatus.NOT_STARTED
-                }
-                SessionReply(id, accepted, if (accepted) null else "Finish session and sync before changing HR source", state)
-            }
             CommunicationProtocol.SESSION_QUERY_PATH -> SessionReply(SessionProtocol.decodeQuery(bytes), true, null, sessionController.state)
             CommunicationProtocol.SESSION_COMMAND_PATH -> {
                 val before = sessionController.state
@@ -145,15 +120,12 @@ class SensorActivity : ComponentActivity() {
             else -> return
         }
         showSession()
-        sessionMessage = reply.error ?: "Session confirmed"
-        sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH, SessionProtocol.encodeReply(reply.copy(heartRateSource = selectedSource.name)))
+        sessionTransport.send(node, CommunicationProtocol.SESSION_STATE_PATH, SessionProtocol.encodeReply(reply))
     }
 
     private lateinit var sender: SensorDataSender
     private var peerNodeId by mutableStateOf<String?>(null)
-    private var transferText by mutableStateOf("Sender stopped")
     private lateinit var batcher: SensorBatcher
-    private var skippedText by mutableStateOf("Samples skipped before sending: 0")
     private var accelerationStatus by mutableStateOf(SensorStatus.NOT_STARTED)
     private var heartRateStatus by mutableStateOf(SensorStatus.NOT_STARTED)
 
@@ -192,10 +164,6 @@ class SensorActivity : ComponentActivity() {
         }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        accelerometerSource = SensorManagerAccelerometerSource(this)
-
-        heartRateSource = HealthServicesHeartRateSource.forPage(this)
-
         connectionManager = WearConnectionManager(
             context = this,
             localRole = DeviceRole.WATCH
@@ -213,11 +181,11 @@ class SensorActivity : ComponentActivity() {
             }
         }
 
-        sender = SensorDataSender(this) { transferText = it }
-        batcher = SensorBatcher({ peerNodeId }, sender) { skippedText = it }
+        sender = SensorDataSender(this)
+        batcher = SensorBatcher({ peerNodeId }, sender)
 
         sessionTransport = SessionTransport(this, { peerNodeId }, ::receiveSession,
-            { sessionMessage = "Ready for phone commands" }, { sessionMessage = it })
+            { Log.d("WatchSession", "Ready for phone commands") }, { Log.w("WatchSession", it) })
         showSession()
 
         setContent {

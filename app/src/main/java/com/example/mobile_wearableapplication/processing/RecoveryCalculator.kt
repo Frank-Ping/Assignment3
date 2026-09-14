@@ -50,7 +50,7 @@ class RecoveryCalculator {
         if (h0 == null || h60 == null || first.coverageFraction!! < 0.8 || last.coverageFraction!! < 0.8)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val drop = h0 - h60
-        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, first, last),
+        val result = MetricResult.Available(RecoveryRate(h0, h60, drop),
             CalculationEvidence(CalculationWindow(t0-5_000_000_000L,end), first.sampleCount+last.sampleCount,
                 sources = first.sources+last.sources))
         finalResult = result

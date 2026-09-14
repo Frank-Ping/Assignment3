@@ -32,9 +32,8 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
         set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }.timeInMillis
     val start = currentHour - 11 * hourMillis
-    val colors = listOf(Color(0xFF00DDE7), Color(0xFFFFD166), Color(0xFFFF7973), Color(0xFFADB5BD), Color(0xFF69737D))
+    val colors = listOf(Color(0xFF00DDE7), Color(0xFFFFD166), Color(0xFFFF7973))
     val stacked = kind == "Intensity"
-    val points = if (kind == "HR") processing.chartOutput.heartRate else processing.chartOutput.rms
     // Refresh aggregation only for a new snapshot/time tick, not unrelated UI changes.
     val (sums, counts, zones) = remember(processing.chartOutput, offset, start, now / 1_000, kind, storedHours) {
         val sums = DoubleArray(12)
@@ -61,7 +60,7 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
                     if (duration > 0) zones[i][interval.zone.ordinal] += duration / 60_000.0
                 }
             }
-        } else points.forEach { point ->
+        } else processing.chartOutput.heartRate.forEach { point ->
             val time = point.timestampNanos / 1_000_000L + offset
             val value = point.value
             if (time in start..now && value != null && value.isFinite()) {
@@ -73,13 +72,9 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
         Triple(sums, counts, zones)
     }
     val means = List(12) { if (counts[it] == 0) null else sums[it] / counts[it] }
-    val low = if (kind == "HR") 40.0 else 0.0
-    val high = when (kind) {
-        "HR" -> 200.0
-        "Intensity" -> 60.0
-        else -> maxOf(1.0, (means.filterNotNull().maxOrNull() ?: 0.0) * 1.1)
-    }
-    val unit = when (kind) { "HR" -> "bpm"; "RMS" -> "m/s²"; else -> "min" }
+    val low = if (stacked) 0.0 else 40.0
+    val high = if (stacked) 60.0 else 200.0
+    val unit = if (stacked) "min" else "bpm"
     val format = SimpleDateFormat("HH:mm", Locale.getDefault())
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
     Canvas(Modifier.fillMaxWidth().weight(1f)) {
@@ -96,7 +91,7 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
         for (i in verticalTicks) {
             val value = low + (high - low) * i / 4
             drawLine(Color(0xFF455057), Offset(left, y(value)), Offset(right, y(value)))
-            val text = String.format(Locale.US, if (kind == "RMS") "%.1f" else "%.0f", value)
+            val text = String.format(Locale.US, "%.0f", value)
             label(text, left - paint.measureText(text) - 7.dp.toPx(), y(value) - (paint.ascent() + paint.descent()) / 2)
         }
         val grid = Color(0xFF455057)
@@ -133,24 +128,21 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
                     }
                     drawCircle(colors[0], 3.dp.toPx(), Offset(x(i), y(value)))
                 }
-                val references = if (kind == "RMS") listOf(0.3, 0.8)
-                    else listOfNotNull((processing.restingHeartRate as? MetricResult.Available)?.value)
+                val references = listOfNotNull((processing.restingHeartRate as? MetricResult.Available)?.value)
                 references.forEach { value ->
                     if (value in low..high) {
                         drawLine(colors[1], Offset(left, y(value)), Offset(right, y(value)), 1.dp.toPx(), pathEffect = dash)
-                        if (kind == "HR") {
-                            val referencePaint = Paint(paint).apply { color = android.graphics.Color.rgb(255, 209, 102) }
-                            val text = "Resting Heart Rate"
-                            val inset = 4.dp.toPx()
-                            val availableWidth = right - left - 2 * inset
-                            if (availableWidth > 0) {
-                                if (referencePaint.measureText(text) > availableWidth)
-                                    referencePaint.textSize *= availableWidth / referencePaint.measureText(text)
-                                val baseline = if (y(value) - inset + referencePaint.ascent() >= top)
-                                    y(value) - inset else y(value) + inset - referencePaint.ascent()
-                                drawContext.canvas.nativeCanvas.drawText(text,
-                                    right - inset - referencePaint.measureText(text), baseline, referencePaint)
-                            }
+                        val referencePaint = Paint(paint).apply { color = android.graphics.Color.rgb(255, 209, 102) }
+                        val text = "Resting Heart Rate"
+                        val inset = 4.dp.toPx()
+                        val availableWidth = right - left - 2 * inset
+                        if (availableWidth > 0) {
+                            if (referencePaint.measureText(text) > availableWidth)
+                                referencePaint.textSize *= availableWidth / referencePaint.measureText(text)
+                            val baseline = if (y(value) - inset + referencePaint.ascent() >= top)
+                                y(value) - inset else y(value) + inset - referencePaint.ascent()
+                            drawContext.canvas.nativeCanvas.drawText(text,
+                                right - inset - referencePaint.measureText(text), baseline, referencePaint)
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 package com.example.mobile_wearableapplication.processing
 
 /** Pure Kotlin. The caller supplies only newly accepted samples, once per sample.
- * Preprocessing is incremental; physiological metric algorithms are added separately.
+ * Processing preserves watch-time phase boundaries and continuity.
  */
 class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private val intensityClassifier = IntensityClassifier(hrMaxBpm)
@@ -9,26 +9,23 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     private var published = state
     private var chartBuffer = ChartBuffer()
     private var finalSummary: SessionSummary? = null
-    private var previousSummary: SessionSummary? = null
     private var preprocessor = SensorPreprocessor()
     private var motionDetector = MotionDetector()
     private var automaticDetector = AutomaticWorkoutDetector(hrMaxBpm)
     private var restingCalculator = RestingHeartRateCalculator()
-    private var exerciseCalculator = ExerciseHeartRateCalculator()
     private var recoveryCalculator = RecoveryCalculator()
-    private var zoneDurationCalculator = ZoneDurationCalculator()
+    private var zoneIntervalCalculator = ZoneIntervalCalculator()
 
     @Synchronized
     fun startSession(session: ProcessingSession) {
         if (state.session == session) return
-        previousSummary = finalSummary ?: previousSummary
         finalSummary = null
         resetCalculators()
         val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
-            restingHeartRate = pending, exerciseHeartRate = pending,
-            intensity = pending, recovery = pending, accelerationRms = pending,
+            restingHeartRate = pending,
+            intensity = pending, recovery = pending,
             workoutState = MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
         )
         publish()
@@ -36,7 +33,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
 
     @Synchronized
     fun reset() {
-        previousSummary = finalSummary ?: previousSummary
         finalSummary = null
         state = ProcessingSnapshot()
         resetCalculators()
@@ -51,9 +47,8 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         motionDetector = MotionDetector()
         automaticDetector = AutomaticWorkoutDetector(hrMaxBpm)
         restingCalculator = RestingHeartRateCalculator()
-        exerciseCalculator = ExerciseHeartRateCalculator()
         recoveryCalculator = RecoveryCalculator()
-        zoneDurationCalculator = ZoneDurationCalculator()
+        zoneIntervalCalculator = ZoneIntervalCalculator()
     }
 
     @Synchronized
@@ -62,7 +57,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         samples.forEach { preprocessor.accept(it) }
         samples.forEach {
             motionDetector.accept(it)
-            chartBuffer.acceleration(it, motionDetector.snapshot())
             restingCalculator.observe(it.timestampNanos, motionDetector.snapshot().stillnessVerified == true)
         }
         state = state.copy(acceleration = summarize(
@@ -80,9 +74,9 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             val smoothed = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos).heartRate3s?.mean
             val confirmed = intensityClassifier.accept(it.timestampNanos, smoothed)
             if (phaseAt(it.timestampNanos) == WorkoutPhase.EXERCISING)
-                zoneDurationCalculator.record(it.timestampNanos, confirmed.zone)
+                zoneIntervalCalculator.record(it.timestampNanos, confirmed.zone)
         }
-        samples.forEach { restingCalculator.accept(it); exerciseCalculator.accept(it); recoveryCalculator.accept(it) }
+        samples.forEach { restingCalculator.accept(it); recoveryCalculator.accept(it) }
         state = state.copy(heartRate = summarize(
             state.heartRate, samples.map { it.timestampNanos }, samples.map { it.source }
         ))
@@ -135,9 +129,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     @Synchronized
     fun snapshot(): ProcessingSnapshot = published
 
-    @Synchronized
-    fun lastCompletedSummary(): SessionSummary? = finalSummary ?: previousSummary
-
     /** Called only on processing events, never from a UI read. */
     private fun publish() {
         val preprocessing = preprocessor.snapshot(state.phaseHistory.lastOrNull()?.watchElapsedTimeNanos)
@@ -148,44 +139,51 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             } == true) intensityClassifier.missing()
         val intensity = if (active) MetricResult.Available(intensityClassifier.snapshot(), CalculationEvidence())
             else MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
-        published = state.copy(zoneDurations = zoneDurationCalculator.result(state.exerciseStartedAt,
-            state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
+        zoneIntervalCalculator.update(state.exerciseStartedAt,
+            state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos)
+        published = state.copy(recovery = recoveryCalculator.result(state.recoveryStartedAt, state.exerciseStartedAt,
             preprocessing.asOfWatchNanos, state.endedAtNanos),
             recoveryRemainingSeconds = recoveryCalculator.remaining(state.recoveryStartedAt, preprocessing.asOfWatchNanos, state.endedAtNanos),
-            intensity = intensity, exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
-            state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), restingHeartRate = restingCalculator.result(state.restingStartedAt), preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
-            stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
-            heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
-            accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
+            intensity = intensity, restingHeartRate = restingCalculator.result(state.restingStartedAt),
+            preprocessing = preprocessing, motion = motion)
         published = published.copy(automaticAction = automaticDetector.accept(published))
         val session = state.session
         val ended = state.endedAtNanos
         if (session != null && ended != null && finalSummary == null) {
-            finalSummary = SessionSummary(session,ended,published.restingHeartRate,published.exerciseHeartRate,
-                published.recovery,published.zoneDurations,state.phaseHistory.toList())
+            finalSummary = SessionSummary(ended, published.restingHeartRate, published.recovery)
         }
-        published = published.copy(chartOutput = chartBuffer.snapshot(state.phaseHistory,published.zoneDurations).copy(zoneIntervals = zoneDurationCalculator.intervals()), finalSummary = finalSummary)
+        published = published.copy(chartOutput = chartBuffer.snapshot(zoneIntervalCalculator.intervals()), finalSummary = finalSummary)
     }
 
     @Synchronized
     fun markHeartRateUnavailable() {
         automaticDetector.interrupt()
-        preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("HR",it) }
-        exerciseCalculator.markUnavailable()
         intensityClassifier.missing()
-        preprocessor.snapshot().asOfWatchNanos?.let { zoneDurationCalculator.record(it, IntensityZone.MISSING) }
+        preprocessor.snapshot().asOfWatchNanos?.let { zoneIntervalCalculator.record(it, IntensityZone.MISSING) }
         publish()
     }
 
     @Synchronized
-    fun breakContinuity() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); publish() }
+    fun breakContinuity() {
+        automaticDetector.interrupt()
+        markHeartRateUnavailable()
+        preprocessor.breakContinuity()
+        motionDetector.interrupt()
+        restingCalculator.interrupt()
+        recoveryCalculator.interrupt()
+        publish()
+    }
 
     @Synchronized
-    fun markAccelerationUnavailable() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; motionDetector.interrupt(); restingCalculator.interrupt(); publish() }
+    fun markAccelerationUnavailable() {
+        automaticDetector.interrupt()
+        motionDetector.interrupt()
+        restingCalculator.interrupt()
+        publish()
+    }
 
     private fun summarize(previous: InputSummary, timestamps: List<Long>, sources: List<SampleSource>) =
         InputSummary(
-            acceptedSamples = previous.acceptedSamples + timestamps.size,
             latestTimestampNanos = maxOf(previous.latestTimestampNanos ?: Long.MIN_VALUE, timestamps.max()),
             sources = previous.sources + sources
         )

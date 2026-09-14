@@ -2,14 +2,12 @@ package com.example.mobile_wearableapplication
 
 import com.example.shared.communication.SessionAction
 
-import com.example.mobile_wearableapplication.communication.SensorDataReceiver
 import com.example.shared.communication.WireDataType
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import java.util.Locale
-import com.example.mobile_wearableapplication.communication.ReceivedSensorStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -24,14 +22,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import com.example.mobile_wearableapplication.communication.*
 import androidx.compose.runtime.Composable
@@ -40,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush.Companion.verticalGradient
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -128,7 +117,7 @@ class SensorActivity : ComponentActivity() {
             check(pageStarted) { "Phone page not active" }
             val node = checkNotNull(peerNodeId)
             ReceivedSensorStore.accept(node, batch)
-        }, { /* Transfer diagnostics are logged by SensorDataReceiver. */ })
+        })
 
         setContent {
             MobileWearableApplicationTheme(darkTheme = true) {
@@ -141,8 +130,7 @@ class SensorActivity : ComponentActivity() {
                     chartNowMillis = chartNowMillis,
                     chartEpochOffsetMillis = historyPreview?.epochOffsetMillis ?: chartEpochOffsetMillis,
                     showingHistoryPreview = historyPreview != null,
-                    controls = controls,
-                    onSourceToggle = { sessionClient.toggleHeartRateSource() }
+                    controls = controls
                 )
             }
         }
@@ -231,7 +219,7 @@ class SensorActivity : ComponentActivity() {
                 else display.currentHeartRateBpm)?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
             "freshness" to if (injectedHr != null) {
                 if (injectedFresh) "Recent" else "Stale · send another ADB reading or clear preview"
-            } else (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
+            } else (display.heartRateUnavailableReason() ?: "Recent"),
             "intensityZone" to (if (exercising) intensity?.zone?.name.orEmpty() else ""),
             "baselineTime" to savedTime(storedHistory.baseline),
             "recoveryTime" to savedTime(storedHistory.recovery),
@@ -249,10 +237,8 @@ class SensorActivity : ComponentActivity() {
 
     }
 
-    private fun metricStatus(result: MetricResult<*>): String = when (result) {
-        is MetricResult.Available -> result.value.toString()
-        is MetricResult.Unavailable -> "— (${result.reason.name.lowercase().replace('_', ' ')})"
-    }
+    private fun metricStatus(result: MetricResult.Unavailable): String =
+        "— (${result.reason.name.lowercase().replace('_', ' ')})"
 
 
 }
@@ -267,20 +253,17 @@ private fun SensorPage(
     chartNowMillis: Long = System.currentTimeMillis(),
     chartEpochOffsetMillis: Long? = null,
     showingHistoryPreview: Boolean = false,
-    controls: SessionControlUi = SessionControlUi(),
-    onSourceToggle: () -> Unit = {}
+    controls: SessionControlUi = SessionControlUi()
 ) {
     var intensityTab by rememberSaveable { mutableStateOf(false) }
     val cyan = Color(0xFF00DDE7)
     val coral = Color(0xFFFF7973)
-    val session = controls.state
     fun value(key: String) = overview[key] ?: "— (waiting for data)"
     BoxWithConstraints(Modifier.fillMaxSize().background(verticalGradient(listOf(
         Color(0xFF000000), Color(0xFF303030)
     ))).safeDrawingPadding()) {
         val scale = (maxHeight.value / 720f).coerceIn(0.7f, 1.15f)
         val gap = 8.dp * scale
-        val time = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(chartNowMillis))
         Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = gap),
             verticalArrangement = Arrangement.spacedBy(gap)) {
             Row(Modifier.height(42.dp * scale), verticalAlignment = Alignment.CenterVertically) {

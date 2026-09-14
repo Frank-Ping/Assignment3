@@ -15,15 +15,13 @@ import java.util.UUID
 /** Main-thread adapter. Disconnected samples are discarded, not replayed. */
 class SensorBatcher(
     private val nodeId: () -> String?,
-    private val sender: SensorDataSender,
-    private val report: (String) -> Unit
+    private val sender: SensorDataSender
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val acceleration = mutableListOf<WireSample>()
     private var sessionId = ""
     private var accelerationSource = WireSource.REAL
     private var running = false
-    private var discarded = 0L
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
@@ -39,9 +37,7 @@ class SensorBatcher(
         acceleration.clear()
         sessionId = confirmedSessionId
         this.accelerationSource = accelerationSource
-        discarded = 0L
         running = true
-        report("Samples skipped before sending: 0")
         handler.postDelayed(tick, 500L)
     }
 
@@ -66,11 +62,9 @@ class SensorBatcher(
     }
 
     private fun transmit(type: WireDataType, source: WireSource, samples: List<WireSample>) {
-        val peer = nodeId()
-        val accepted = peer != null && sender.sendBatch(peer, SensorBatch(
+        val peer = nodeId() ?: return
+        sender.sendBatch(peer, SensorBatch(
             sessionId, UUID.randomUUID().toString(), type, source, samples))
-        if (!accepted) discarded += samples.size
-        report("Samples skipped before sending: $discarded")
     }
 
     fun stop() {

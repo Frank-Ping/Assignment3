@@ -25,7 +25,7 @@ class SessionTransport(
         if (listener != null) return
         val token = ++generation
         val callback = MessageClient.OnMessageReceivedListener { event ->
-            if (event.path in setOf(CommunicationProtocol.SESSION_COMMAND_PATH, CommunicationProtocol.SESSION_STATE_PATH, CommunicationProtocol.SESSION_QUERY_PATH, CommunicationProtocol.SOURCE_COMMAND_PATH)) {
+            if (event.path in setOf(CommunicationProtocol.SESSION_COMMAND_PATH, CommunicationProtocol.SESSION_STATE_PATH, CommunicationProtocol.SESSION_QUERY_PATH)) {
                 val connection = peerEpoch
                 handler.post {
                     if (token == generation && connection == peerEpoch && ready && event.sourceNodeId == peer()) {

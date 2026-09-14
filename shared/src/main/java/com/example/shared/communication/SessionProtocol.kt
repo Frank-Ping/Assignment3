@@ -7,7 +7,7 @@ enum class SessionAction(val label: String) {
     START_SESSION("Start Session"), START_WORKOUT("Start Workout"),
     END_WORKOUT("End Workout"), FINISH_SESSION("Finish Session")
 }
-enum class SessionPhase(val label: String) { RESTING("Resting"), EXERCISING("Exercising"), RECOVERING("Recovering") }
+enum class SessionPhase { RESTING, EXERCISING, RECOVERING }
 enum class SessionLifecycle { IDLE, RUNNING, ENDED, INTERRUPTED }
 data class PhaseTransition(val phase: SessionPhase, val revision: Long, val watchElapsedTimeNanos: Long)
 data class SessionState(
@@ -26,7 +26,7 @@ data class SessionState(
     }
 }
 data class SessionCommand(val commandId: String, val action: SessionAction, val expectedSessionId: String?, val expectedRevision: Long)
-data class SessionReply(val requestId: String, val accepted: Boolean, val error: String?, val state: SessionState, val heartRateSource: String? = null)
+data class SessionReply(val requestId: String, val accepted: Boolean, val error: String?, val state: SessionState)
 
 /** Identical wire format in both application modules; longs are decimal strings. */
 object SessionProtocol {
@@ -50,7 +50,6 @@ object SessionProtocol {
     fun decodeQuery(bytes: ByteArray): String = id(parse(bytes).getString("requestId"))
     fun encodeReply(reply: SessionReply): ByteArray = JSONObject().apply {
         put("version", 1); put("requestId", reply.requestId); put("accepted", reply.accepted)
-        put("heartRateSource", reply.heartRateSource ?: JSONObject.NULL)
         put("error", reply.error ?: JSONObject.NULL)
         put("sessionId", reply.state.sessionId ?: JSONObject.NULL)
         put("revision", reply.state.revision.toString()); put("lifecycle", reply.state.lifecycle.name)
@@ -84,8 +83,7 @@ object SessionProtocol {
             else require(state.endedAtNanos != null && state.endedAtNanos >= transitions.last().watchElapsedTimeNanos)
         }
         SessionReply(id(json.getString("requestId")), json.getBoolean("accepted"),
-            if (json.isNull("error")) null else json.getString("error").take(256), state,
-            if (json.isNull("heartRateSource")) null else json.getString("heartRateSource").also { require(it == "REAL" || it == "DEMO") })
+            if (json.isNull("error")) null else json.getString("error").take(256), state)
     }
 }
 

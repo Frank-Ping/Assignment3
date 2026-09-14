@@ -36,6 +36,11 @@ android {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.androidx.fragment) {
+            because("Play Services pulls an older Fragment that is incompatible with Activity Result APIs")
+        }
+    }
     implementation(project(":shared"))
     implementation(libs.androidx.health.services.client)
     implementation(libs.kotlinx.coroutines.android)
@@ -43,20 +48,11 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.activity.ktx)
-    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.wear.tooling.preview)
     implementation(libs.compose.material3)
-    implementation(libs.compose.ui.tooling)
-    implementation(libs.material)
     implementation(libs.play.services.wearable)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

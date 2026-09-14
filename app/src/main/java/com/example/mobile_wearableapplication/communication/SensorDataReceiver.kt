@@ -14,8 +14,7 @@ import com.google.android.gms.wearable.Wearable
 class SensorDataReceiver(
     context: Context,
     private val expectedNodeId: () -> String?,
-    private val onBatchReceived: (SensorBatch) -> Unit,
-    private val reportStatus: (String) -> Unit
+    private val onBatchReceived: (SensorBatch) -> Unit
 ) {
     private val client = Wearable.getMessageClient(context.applicationContext)
     private val handler = Handler(Looper.getMainLooper())
@@ -81,6 +80,5 @@ class SensorDataReceiver(
 
     private fun report(message: String) {
         Log.d("SensorTransfer", message)
-        reportStatus(message)
     }
 }

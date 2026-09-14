@@ -8,9 +8,8 @@ import com.example.wear.presentation.data.HeartRateRecord
 import com.example.wear.presentation.data.HeartRateSourceType
 import com.example.wear.presentation.data.SensorStatus
 
-enum class HeartRateDemoScenario(val label: String) {
-    NORMAL("Normal"), AUTO("Automatic timeline"), MISSING("Missing data"),
-    BOUNDARY("Boundary 139/141"), NO_RECOVERY("No recovery")
+enum class HeartRateDemoScenario {
+    NORMAL, AUTO, MISSING, BOUNDARY, NO_RECOVERY
 }
 
 /** One reading per second; fixed phase-relative sequences, no catch-up or random noise. */

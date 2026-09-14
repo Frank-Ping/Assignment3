@@ -8,11 +8,10 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 
-internal data class StoredHour(val time: Long, val source: String, val sum: Double, val count: Long, val zones: List<Double>)
-internal data class StoredSummary(val ended: Long, val baseline: Double?, val recovery: Double?)
+internal data class StoredHour(val time: Long, val sum: Double, val count: Long, val zones: List<Double>)
 internal data class StoredMetric(val value: Double, val savedAt: Long?)
-internal data class StoredHistory(val hours: List<StoredHour> = emptyList(), val summary: StoredSummary? = null,
-    val error: String? = null, val ready: Boolean = false,
+internal data class StoredHistory(val hours: List<StoredHour> = emptyList(),
+    val error: String? = null,
     val baseline: StoredMetric? = null, val recovery: StoredMetric? = null)
 
 /** One process-wide serial writer. ADB previews never enter this store. */
@@ -64,7 +63,7 @@ internal object HistoryFileStore {
                 publish()
             } catch (e: Exception) {
                 writable = false // Preserve an unreadable file rather than overwrite it.
-                snapshot = StoredHistory(error = "History could not be loaded: ${e.message}", ready = true)
+                snapshot = StoredHistory(error = "History could not be loaded: ${e.message}")
             }
         }
     }
@@ -197,8 +196,6 @@ internal object HistoryFileStore {
     }
     private fun publish() {
         val rows = mutableListOf<StoredHour>()
-        var summary: StoredSummary? = null
-        var ended = 0L
         val sessions = root.getJSONObject("sessions")
         val cutoff = System.currentTimeMillis() - 12 * 3_600_000L
         sessions.keys().forEach { key ->
@@ -206,17 +203,8 @@ internal object HistoryFileStore {
             val hours = data.getJSONObject("hours")
             hours.keys().forEach { id ->
                 val row = hours.getJSONObject(id)
-                if (row.getLong("time") >= cutoff) rows.add(StoredHour(row.getLong("time"), row.getString("source"), row.getDouble("sum"), row.getLong("count"),
+                if (row.getLong("time") >= cutoff) rows.add(StoredHour(row.getLong("time"), row.getDouble("sum"), row.getLong("count"),
                     List(3) { row.getJSONArray("zones").getDouble(it) }))
-            }
-            if (data.optLong("ended") >= cutoff && data.optLong("ended") > ended && data.has("summary")) {
-                ended = data.getLong("ended")
-                val saved = data.getJSONObject("summary")
-                fun value(name: String, field: String): Double? {
-                    val metric = saved.getJSONObject(name)
-                    return if (metric.getBoolean("valid")) metric.getDouble(field) else null
-                }
-                summary = StoredSummary(ended, value("baseline", "bpm"), value("recovery", "declineBpm"))
             }
         }
         fun latest(name: String, field: String): StoredMetric? {
@@ -225,7 +213,7 @@ internal object HistoryFileStore {
             if (!metric.optBoolean("valid") || !value.isFinite()) return null
             return StoredMetric(value, metric.optLong("savedAt").takeIf { it > 0 })
         }
-        snapshot = StoredHistory(rows, summary, ready = true,
+        snapshot = StoredHistory(rows,
             baseline = latest("baseline", "bpm"), recovery = latest("recovery", "declineBpm"))
     }
 }

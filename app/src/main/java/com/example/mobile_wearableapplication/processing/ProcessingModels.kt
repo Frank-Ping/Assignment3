@@ -6,8 +6,7 @@ enum class SampleSource { REAL, DEMO }
 enum class WorkoutPhase { RESTING, EXERCISING, RECOVERING }
 enum class UnavailableReason {
     NO_SESSION, AWAITING_PHASE_CONFIRMATION, NOT_IMPLEMENTED,
-    COLLECTING_BASELINE, COLLECTING_RECOVERY, RECOVERY_MOTION_UNKNOWN, INSUFFICIENT_DATA, INTERRUPTED_BY_MOVEMENT,
-    INVALID_CONFIGURATION, STALE_DATA
+    COLLECTING_BASELINE, COLLECTING_RECOVERY, INSUFFICIENT_DATA
 }
 
 /** Measurement time is watch elapsed time, never the phone receipt clock. */
@@ -36,26 +35,14 @@ data class ConfirmedPhaseEvent(
     val phase: WorkoutPhase, val watchElapsedTimeNanos: Long
 )
 
-data class ExerciseHeartRate(
-    val currentBpm: Double?, val timeWeightedAverageBpm: Double?, val smoothedPeakBpm: Double?
-)
 enum class IntensityZone { LOW, MODERATE, HIGH, UNCLASSIFIED, MISSING }
-data class ExerciseIntensity(val percentage: Double?, val zone: IntensityZone, val confirmedAtNanos: Long? = null, val hrMaxBpm: Double = 200.0)
-data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double,
-    val startEvidence: CalculationEvidence = CalculationEvidence(),
-    val endEvidence: CalculationEvidence = CalculationEvidence())
+data class ExerciseIntensity(val zone: IntensityZone)
+data class RecoveryRate(val startBpm: Double, val endBpm: Double, val declineBpm: Double)
 
-/** Counts describe accepted input, not calculated physiological quality. */
+/** Latest measurement time and sources required by detection and history. */
 data class InputSummary(
-    val acceptedSamples: Long = 0,
     val latestTimestampNanos: Long? = null,
     val sources: Set<SampleSource> = emptySet()
-)
-data class ProcessingQuality(
-    val heartRateCoverageFraction: Double? = null,
-    val accelerationCoverageFraction: Double? = null,
-    val stillnessVerified: Boolean? = null,
-    val motionDetected: Boolean? = null
 )
 data class ProcessingSnapshot(
     val session: ProcessingSession? = null,
@@ -65,18 +52,14 @@ data class ProcessingSnapshot(
     val phaseHistory: List<ConfirmedPhaseEvent> = emptyList(),
     val endedAtNanos: Long? = null,
     val recoveryRemainingSeconds: Long? = null,
-    val zoneDurations: ZoneDurations? = null,
     val chartOutput: ChartOutput = ChartOutput(),
     val finalSummary: SessionSummary? = null,
     val acceleration: InputSummary = InputSummary(),
     val heartRate: InputSummary = InputSummary(),
     val restingHeartRate: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
-    val exerciseHeartRate: MetricResult<ExerciseHeartRate> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
     val intensity: MetricResult<ExerciseIntensity> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
     val recovery: MetricResult<RecoveryRate> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
-    val workoutState: MetricResult<ConfirmedPhaseEvent> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
-    val accelerationRms: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.NO_SESSION),
-    val quality: ProcessingQuality = ProcessingQuality()
+    val workoutState: MetricResult<ConfirmedPhaseEvent> = MetricResult.Unavailable(UnavailableReason.NO_SESSION)
 ) {
     // Watch elapsed time in nanoseconds; derived from the confirmed history to avoid duplicate state.
     val restingStartedAt: Long?

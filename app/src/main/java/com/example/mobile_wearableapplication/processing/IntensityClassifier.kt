@@ -5,11 +5,11 @@ class IntensityClassifier(private val hrMax: Double = 200.0) {
     private var lastTime: Long? = null
     private var candidate: IntensityZone? = null
     private var candidateSince = 0L
-    private var value = ExerciseIntensity(null, IntensityZone.UNCLASSIFIED, hrMaxBpm = hrMax)
+    private var value = ExerciseIntensity(IntensityZone.UNCLASSIFIED)
     fun reset() {
         lastTime = null
         candidate = null
-        value = ExerciseIntensity(null, IntensityZone.UNCLASSIFIED, hrMaxBpm = hrMax)
+        value = ExerciseIntensity(IntensityZone.UNCLASSIFIED)
     }
     fun missing(): ExerciseIntensity {
         reset()
@@ -22,7 +22,7 @@ class IntensityClassifier(private val hrMax: Double = 200.0) {
         lastTime = time
         if (!hrMax.isFinite() || hrMax <= 0 || smoothedBpm == null || !smoothedBpm.isFinite() || smoothedBpm <= 0) {
             candidate = null
-            value = ExerciseIntensity(null, IntensityZone.UNCLASSIFIED, hrMaxBpm = hrMax)
+            value = ExerciseIntensity(IntensityZone.UNCLASSIFIED)
             return value
         }
         if (value.zone == IntensityZone.MISSING) value = value.copy(zone = IntensityZone.UNCLASSIFIED)
@@ -37,11 +37,10 @@ class IntensityClassifier(private val hrMax: Double = 200.0) {
         else {
             if (candidate != next) { candidate = next; candidateSince = time }
             if (time - candidateSince >= 3_000_000_000L) {
-                value = value.copy(zone = next, confirmedAtNanos = time)
+                value = value.copy(zone = next)
                 candidate = null
             }
         }
-        value = value.copy(percentage = percentage)
         return value
     }
     fun snapshot(): ExerciseIntensity = value

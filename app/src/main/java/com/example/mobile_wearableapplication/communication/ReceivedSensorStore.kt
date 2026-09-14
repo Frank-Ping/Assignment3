@@ -1,7 +1,6 @@
 package com.example.mobile_wearableapplication.communication
 
 import com.example.shared.communication.WireDataType
-import com.example.shared.communication.WireSource
 import com.example.shared.communication.WireSample
 import com.example.shared.communication.SensorBatch
 import com.example.shared.communication.SessionLifecycle
@@ -20,34 +19,21 @@ import com.example.mobile_wearableapplication.processing.WorkoutPhase
 
 data class ReceivedSample(
     val sample: WireSample,
-    val source: WireSource,
     val receivedAtMillis: Long
 )
 
 data class ReceivedStreamSnapshot(
     val latest: ReceivedSample?,
-    val history: List<ReceivedSample>,
-    val batches: Long,
-    val receivedSamples: Long,
-    val duplicateBatches: Long,
     val lastNewSampleAtMillis: Long?,
     val freshSinceResume: Boolean
 )
 
-/** Phone-local observation interval, not an exact watch sample-loss interval. */
-data class ReceptionInterruption(
-    val sessionId: String, val startedAtMillis: Long,
-    val endedAtMillis: Long? = null, val reason: String
-)
 data class ReceptionDiagnostics(
     val ready: Boolean, val message: String,
-    val interruptions: List<ReceptionInterruption>, val rejectedBatches: Long,
     val sessionLifecycle: SessionLifecycle?
 )
 
 data class ReceivedSessionSnapshot(
-    val nodeId: String,
-    val sessionId: String,
     val streams: Map<WireDataType, ReceivedStreamSnapshot>
 )
 
@@ -55,7 +41,6 @@ data class ReceivedSessionSnapshot(
 object ReceivedSensorStore {
     const val ACCELERATION_CAPACITY = 1500
     const val HEART_RATE_CAPACITY = 600
-    const val STALE_AFTER_MILLIS = 10_000L
     private const val SESSION_CAPACITY = 4
     private const val BATCH_ID_CAPACITY = 256
 
@@ -63,9 +48,6 @@ object ReceivedSensorStore {
         val samples = TreeMap<Long, ReceivedSample>()
         val batchIds = LinkedHashSet<String>()
         var latest: ReceivedSample? = null
-        var batches = 0L
-        var receivedSamples = 0L
-        var duplicateBatches = 0L
         var lastNewSampleAtMillis: Long? = null
         var freshSinceResume = false
     }
@@ -76,8 +58,6 @@ object ReceivedSensorStore {
     private var confirmedState: SessionState? = null
     private var receptionReady = false
     private var receptionMessage = "Waiting for session confirmation"
-    private val interruptions = mutableListOf<ReceptionInterruption>()
-    private var rejectedBatches = 0L
     private var accelerationTimedOut = false
     private var heartRateTimedOut = false
 
@@ -87,22 +67,14 @@ object ReceivedSensorStore {
         receptionReady = false
         receptionMessage = reason
         activeSession?.let { sessions[it] }?.values?.forEach { it.freshSinceResume = false }
-        val id = activeSession?.second ?: return
-        if (confirmedState?.lifecycle != SessionLifecycle.RUNNING) return
-        if (interruptions.lastOrNull()?.endedAtMillis == null && interruptions.lastOrNull()?.sessionId == id) return
-        interruptions.add(ReceptionInterruption(id, SystemClock.elapsedRealtime(), reason = reason))
-        if (interruptions.size > 32) interruptions.removeAt(0)
     }
 
     @Synchronized
     fun receptionDiagnostics() = ReceptionDiagnostics(receptionReady, receptionMessage,
-        interruptions.toList(), rejectedBatches, confirmedState?.lifecycle)
+        confirmedState?.lifecycle)
 
     @Synchronized
     fun confirmSession(nodeId: String, state: SessionState) {
-        if (interruptions.lastOrNull()?.endedAtMillis == null && interruptions.isNotEmpty()) {
-            interruptions[interruptions.lastIndex] = interruptions.last().copy(endedAtMillis = SystemClock.elapsedRealtime())
-        }
         val id = state.sessionId
         if (id == null) {
             activeSession = null
@@ -139,25 +111,19 @@ object ReceivedSensorStore {
         val key = nodeId to batch.sessionId
         // A sensor batch cannot select or restart a session. No pre-confirmation replay yet.
         if (!receptionReady || key != activeSession) {
-            rejectedBatches++
             error("Receiving suspended or batch belongs to an unconfirmed session; no replay")
         }
         val state = checkNotNull(confirmedState)
         val streams = sessions.getValue(key)
         val stream = streams.getOrPut(batch.dataType) { Stream() }
-        if (!stream.batchIds.add(batch.batchId)) {
-            stream.duplicateBatches++
-            return
-        }
+        if (!stream.batchIds.add(batch.batchId)) return
         if (stream.batchIds.size > BATCH_ID_CAPACITY) stream.batchIds.remove(stream.batchIds.first())
-        stream.batches++
-        stream.receivedSamples += batch.samples.size
         val now = SystemClock.elapsedRealtime()
         val newlyAccepted = mutableListOf<WireSample>()
         for (sample in batch.samples) {
             if (sample.timestampNanos < state.transitions.first().watchElapsedTimeNanos ||
                 state.endedAtNanos?.let { sample.timestampNanos >= it } == true) continue
-            val received = ReceivedSample(sample, batch.source, now)
+            val received = ReceivedSample(sample, now)
             if (stream.samples.putIfAbsent(sample.timestampNanos, received) != null) continue
             newlyAccepted.add(sample)
             val latest = stream.latest
@@ -191,9 +157,6 @@ object ReceivedSensorStore {
     fun processingSnapshot(): ProcessingSnapshot = processor.snapshot()
 
     @Synchronized
-    fun lastCompletedSummary() = processor.lastCompletedSummary()
-
-    @Synchronized
     fun checkReceptionTimeouts() {
         val lastReceipt = activeSession?.let { sessions[it] }?.get(WireDataType.ACCELEROMETER)?.lastNewSampleAtMillis
         // Receipt watchdog allows for the existing 500 ms batches; never subtract watch time here.
@@ -208,17 +171,11 @@ object ReceivedSensorStore {
     }
 
     @Synchronized
-    fun acceptConfirmedPhase(event: ConfirmedPhaseEvent) {
-        processor.acceptConfirmedPhase(event)
-    }
-
-    @Synchronized
     fun snapshot(): ReceivedSessionSnapshot? {
         val key = activeSession ?: return null
         val streams = sessions.getValue(key).mapValues { (_, stream) ->
-            ReceivedStreamSnapshot(stream.latest, stream.samples.values.toList(), stream.batches,
-                stream.receivedSamples, stream.duplicateBatches, stream.lastNewSampleAtMillis, stream.freshSinceResume)
+            ReceivedStreamSnapshot(stream.latest, stream.lastNewSampleAtMillis, stream.freshSinceResume)
         }
-        return ReceivedSessionSnapshot(key.first, key.second, streams)
+        return ReceivedSessionSnapshot(streams)
     }
 }

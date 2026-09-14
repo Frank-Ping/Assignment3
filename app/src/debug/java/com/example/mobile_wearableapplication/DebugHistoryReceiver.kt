@@ -1,7 +1,5 @@
 package com.example.mobile_wearableapplication
 
-import com.example.shared.communication.SessionAction
-
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -45,7 +43,6 @@ class DebugHistoryReceiver : BroadcastReceiver() {
         }.timeInMillis - 11 * 3_600_000L
         val random = Random(intent.getIntExtra("seed", 551))
         val hr = mutableListOf<ChartPoint>()
-        val rms = mutableListOf<ChartPoint>()
         val intervals = mutableListOf<ZoneInterval>()
         // Minutes in Low / Moderate / High / Unclassified / Missing order.
         val schedule = listOf(
@@ -57,7 +54,6 @@ class DebugHistoryReceiver : BroadcastReceiver() {
             intArrayOf(0,0,0,0,0), intArrayOf(15,25,15,3,2)
         )
         fun nanos(wall: Long) = (wall - start) * 1_000_000L
-        val totals = DoubleArray(3)
         schedule.forEachIndexed { hour, durations ->
             val hourStart = start + hour * 3_600_000L
             var cursor = hourStart
@@ -65,7 +61,6 @@ class DebugHistoryReceiver : BroadcastReceiver() {
                 val finish = minOf(cursor + minutes * 60_000L, now)
                 if (finish > cursor) {
                     intervals.add(ZoneInterval(nanos(cursor), nanos(finish), IntensityZone.entries[zone]))
-                    if (zone < totals.size) totals[zone] += (finish - cursor) / 1000.0
                 }
                 cursor += minutes * 60_000L
             }
@@ -82,20 +77,11 @@ class DebugHistoryReceiver : BroadcastReceiver() {
                     IntensityZone.HIGH -> 162.0
                     else -> if (recovering) 110.0 - minute * 0.65 else 68.0
                 }
-                val movement = when (zone) {
-                    IntensityZone.LOW -> 0.45
-                    IntensityZone.MODERATE -> 1.0
-                    IntensityZone.HIGH -> 1.8
-                    else -> 0.1
-                }
                 hr.add(ChartPoint(time, if (missing) null else bpm + random.nextDouble(-3.0, 3.0), SampleSource.DEMO))
-                rms.add(ChartPoint(time, if (missing) null else movement + random.nextDouble(0.0, 0.08), SampleSource.DEMO))
             }
         }
-        val durations = ZoneDurations(totals[0], totals[1], totals[2])
         HistoryPreviewStore.value = HistoryPreview(
-            ProcessingSnapshot(chartOutput = ChartOutput(heartRate = hr, rms = rms,
-                zoneDurations = durations, zoneIntervals = intervals),
+            ProcessingSnapshot(chartOutput = ChartOutput(heartRate = hr, zoneIntervals = intervals),
                 restingHeartRate = MetricResult.Available(68.0, CalculationEvidence(sources = setOf(SampleSource.DEMO))),
                 // Synthetic summary fixture, not a result calculated from minute-spaced chart points.
                 recovery = MetricResult.Available(

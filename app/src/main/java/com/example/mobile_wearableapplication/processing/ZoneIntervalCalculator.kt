@@ -1,14 +1,9 @@
 package com.example.mobile_wearableapplication.processing
 
-/** Cumulative seconds for classified intensity only; gaps remain in zone intervals. */
-data class ZoneDurations(
-    val lowSeconds: Double, val moderateSeconds: Double, val highSeconds: Double
-)
-
 data class ZoneInterval(val startNanos: Long, val endNanos: Long, val zone: IntensityZone)
 
 /** Integrates confirmed states, never candidate states. Snapshot reads do not accumulate again. */
-class ZoneDurationCalculator {
+class ZoneIntervalCalculator {
     private data class Event(val time: Long, val zone: IntensityZone)
     private val committedIntervals = mutableListOf<ZoneInterval>()
     private var displayIntervals = emptyList<ZoneInterval>()
@@ -21,7 +16,6 @@ class ZoneDurationCalculator {
         else target.add(ZoneInterval(start, end, zone))
     }
     private var closedAt: Long? = null
-    private var closedResult: ZoneDurations? = null
     private val events = mutableListOf<Event>()
     private var lastTime = -1L
     fun record(time: Long, zone: IntensityZone) {
@@ -33,24 +27,21 @@ class ZoneDurationCalculator {
     private var committedCursor = 0L
     private var committedZone = IntensityZone.UNCLASSIFIED
     private var committedExpires = 0L
-    private val committedTotals = LongArray(3)
-    fun result(start: Long?, finish: Long?, now: Long?): ZoneDurations? {
-        if (start == null) return null
-        if (finish != null && closedAt == finish) closedResult?.let { return it }
+    fun update(start: Long?, finish: Long?, now: Long?) {
+        if (start == null) return
+        if (finish != null && closedAt == finish) return
         val end = maxOf(start, finish ?: now ?: start)
         if (initializedStart == null) {
             initializedStart = start; committedCursor = start
             committedExpires = start + SensorPreprocessor.HEART_RATE_HOLD_NANOS
         }
-        if (initializedStart != start || end < committedCursor) return null
+        if (initializedStart != start || end < committedCursor) return
         while (events.isNotEmpty() && events.first().time < end - 65_000_000_000L) {
             val event = events.removeAt(0)
             if (event.time < committedCursor) continue
             val heldEnd = minOf(event.time, committedExpires).coerceAtLeast(committedCursor)
             append(committedIntervals, committedCursor, heldEnd, committedZone)
             append(committedIntervals, heldEnd, event.time, IntensityZone.MISSING)
-            if (committedZone.ordinal < committedTotals.size)
-                committedTotals[committedZone.ordinal] += heldEnd - committedCursor
             committedCursor = event.time; committedZone = event.zone
             committedExpires = event.time + SensorPreprocessor.HEART_RATE_HOLD_NANOS
         }
@@ -58,7 +49,6 @@ class ZoneDurationCalculator {
         while (committedIntervals.isNotEmpty() && committedIntervals.first().endNanos <= cutoff)
             committedIntervals.removeAt(0)
         val tail = mutableListOf<ZoneInterval>()
-        val totals = committedTotals.copyOf()
         var cursor = committedCursor
         var zone = committedZone
         var expires = committedExpires
@@ -66,7 +56,6 @@ class ZoneDurationCalculator {
             val heldEnd = minOf(to, expires).coerceAtLeast(cursor)
             append(tail, cursor, heldEnd, zone)
             append(tail, heldEnd, to, IntensityZone.MISSING)
-            if (zone.ordinal < totals.size) totals[zone.ordinal] += heldEnd - cursor
             cursor = to
         }
         for (event in events) {
@@ -78,10 +67,7 @@ class ZoneDurationCalculator {
         }
         addUntil(end)
         displayIntervals = committedIntervals.toList() + tail
-        val result = ZoneDurations(totals[IntensityZone.LOW.ordinal]/1e9,
-            totals[IntensityZone.MODERATE.ordinal]/1e9, totals[IntensityZone.HIGH.ordinal]/1e9)
-        if (finish != null) { closedAt = finish; closedResult = result }
-        return result
+        if (finish != null) closedAt = finish
     }
 }
 

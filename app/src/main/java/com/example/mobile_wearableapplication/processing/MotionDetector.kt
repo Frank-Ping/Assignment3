@@ -4,12 +4,8 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 enum class MotionState { UNKNOWN, STILL, MOTION }
-data class MotionResult(
-    val state: MotionState = MotionState.UNKNOWN,
-    val rms: MetricResult<Double> = MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
-) {
+data class MotionResult(val state: MotionState = MotionState.UNKNOWN) {
     val stillnessVerified: Boolean? get() = if (state == MotionState.UNKNOWN) null else state == MotionState.STILL
-    val motionDetected: Boolean? get() = if (state == MotionState.UNKNOWN) null else state == MotionState.MOTION
 }
 
 /** Magnitude-minus-gravity approximation; thresholds are engineering defaults, not calibrated. */
@@ -47,9 +43,7 @@ class MotionDetector(private val stillThreshold: Double = 0.3, private val motio
             rms >= motionThreshold -> MotionState.MOTION
             else -> result.state // Unknown also persists inside the dead band.
         }
-        result = MotionResult(classification, MetricResult.Available(rms,
-            CalculationEvidence(CalculationWindow(start, sample.timestampNanos), points.size.toLong(),
-                1.0, points.map { it.source }.toSet())))
+        result = MotionResult(classification)
     }
 
     // Measurement gaps are checked in accept(); receipt timeouts call interrupt().

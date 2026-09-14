@@ -15,8 +15,8 @@ import java.util.UUID
 
 data class SessionControlUi(
     val state: SessionState? = null, val synchronized: Boolean = false,
-    val pending: Boolean = false, val message: String = "Waiting for watch",
-    val connected: Boolean = false, val heartRateSource: String? = null
+    val pending: Boolean = false,
+    val connected: Boolean = false
 )
 class PhoneSessionClient(
     context: Context,
@@ -44,18 +44,11 @@ class PhoneSessionClient(
                 cancelRequest()
                 if (previous != null && previous.sessionId == reply.state.sessionId && reply.state.revision < previous.revision) {
                     onUnavailable("Stale session reply; waiting for confirmation")
-                    update(ui.copy(pending = false, synchronized = false, message = "Old reply ignored; sync state"))
+                    update(ui.copy(pending = false, synchronized = false))
                 } else {
                     lastStateNode = node
                     onState(node, reply.state)
-                    val replyError = reply.error
-                    val message = when {
-                        replyError != null -> replyError
-                        reply.state.lifecycle == SessionLifecycle.INTERRUPTED -> "Watch collection interrupted; start a new session"
-                        reply.state.lifecycle == SessionLifecycle.ENDED -> "Session ended; collection stopped"
-                        else -> "Watch confirmed"
-                    }
-                    update(SessionControlUi(reply.state, true, false, message, true, reply.heartRateSource))
+                    update(SessionControlUi(reply.state, true, false, true))
                     scheduleRefresh()
                 }
             }
@@ -63,7 +56,7 @@ class PhoneSessionClient(
     }, { if (running) sync() }, { message ->
         if (running) {
             onUnavailable(message)
-            update(ui.copy(synchronized = false, message = message))
+            update(ui.copy(synchronized = false))
         }
     })
 
@@ -80,8 +73,7 @@ class PhoneSessionClient(
         cancelRequest()
         onUnavailable(if (node == null) reason else "Reconnected; querying watch session")
         val retained = if (lastStateNode == node || node == null) ui.state else null
-        update(SessionControlUi(state = retained, connected = node != null,
-            message = if (node == null) "$reason; displayed phase is last confirmed" else "Synchronizing watch state"))
+        update(SessionControlUi(state = retained, connected = node != null))
         if (node != null) sync()
     }
     fun sync() {
@@ -99,7 +91,7 @@ class PhoneSessionClient(
         queryAttempts++
         if (!backgroundRefresh) onUnavailable("Waiting for watch session confirmation")
         val id = UUID.randomUUID().toString()
-        beginRequest(id, "Synchronizing ($queryAttempts/3)", isQuery = true, retainConfirmation = backgroundRefresh)
+        beginRequest(id, isQuery = true, retainConfirmation = backgroundRefresh)
         transport.send(node, CommunicationProtocol.SESSION_QUERY_PATH, SessionProtocol.encodeQuery(id))
     }
     fun command(action: SessionAction) {
@@ -107,36 +99,19 @@ class PhoneSessionClient(
         val state = ui.state ?: return
         if (!running || !transport.ready || !ui.synchronized || ui.pending || !state.allows(action)) return
         val id = UUID.randomUUID().toString()
-        beginRequest(id, "Waiting for confirmation: ${action.label}", isQuery = false)
+        beginRequest(id, isQuery = false)
         transport.send(node, CommunicationProtocol.SESSION_COMMAND_PATH,
             SessionProtocol.encodeCommand(SessionCommand(id, action, state.sessionId, state.revision)))
     }
-    fun toggleHeartRateSource() {
-        val node = peer ?: return
-        val state = ui.state ?: return
-        val source = ui.heartRateSource ?: return
-        if (!running || !transport.ready || !ui.synchronized || ui.pending || state.lifecycle == SessionLifecycle.RUNNING) return
-        val id = UUID.randomUUID().toString()
-        beginRequest(id, "Confirming HR source", isQuery = false)
-        val payload = org.json.JSONObject().apply {
-            put("requestId", id)
-            put("source", if (source == "REAL") "DEMO" else "REAL")
-            put("revision", state.revision)
-            put("sessionId", state.sessionId ?: org.json.JSONObject.NULL)
-        }.toString().toByteArray(Charsets.UTF_8)
-        transport.send(node, CommunicationProtocol.SOURCE_COMMAND_PATH, payload)
-    }
-
-    private fun beginRequest(id: String, message: String, isQuery: Boolean, retainConfirmation: Boolean = false) {
+    private fun beginRequest(id: String, isQuery: Boolean, retainConfirmation: Boolean = false) {
         requestId = id
-        update(ui.copy(pending = true, synchronized = retainConfirmation && ui.synchronized, message = message))
+        update(ui.copy(pending = true, synchronized = retainConfirmation && ui.synchronized))
         handler.postDelayed({
             if (running && requestId == id) {
                 requestId = null
                 onUnavailable("Confirmation timeout; session state unknown")
                 if (isQuery && queryAttempts < 3 && peer != null) query()
-                else update(ui.copy(pending = false, synchronized = false,
-                    message = "Confirmation timeout; outcome unknown. Sync state."))
+                else update(ui.copy(pending = false, synchronized = false))
             }
         }, 5_000L)
     }
@@ -159,7 +134,7 @@ class PhoneSessionClient(
         running = false
         onUnavailable("Phone page closed; receiving paused")
         cancelRequest(); transport.stop(); peer = null
-        update(ui.copy(synchronized = false, pending = false, connected = false, message = "Receiving paused"))
+        update(ui.copy(synchronized = false, pending = false, connected = false))
     }
     private fun update(value: SessionControlUi) { ui = value; onUi(value) }
 }

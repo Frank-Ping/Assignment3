@@ -12,31 +12,24 @@ internal data class SensorDisplayData(
     val processing: ProcessingSnapshot,
     val session: ReceivedSessionSnapshot?,
     val reception: ReceptionDiagnostics,
-    val lastSummary: SessionSummary?,
     val readAtMillis: Long
 ) {
-    val charts get() = processing.chartOutput
-    val currentSummary get() = processing.finalSummary
-
-    fun unavailableReason(type: WireDataType): String? {
+    fun heartRateUnavailableReason(): String? {
         if (processing.session == null) return "No session"
         if (!reception.ready) return "Historical / ${reception.message}"
         if (reception.sessionLifecycle != SessionLifecycle.RUNNING) return "Historical / collection ended"
-        val stream = session?.streams?.get(type) ?: return "Waiting for data"
+        val stream = session?.streams?.get(WireDataType.HEART_RATE) ?: return "Waiting for data"
         if (!stream.freshSinceResume) return "Waiting for new sample"
         val receipt = stream.lastNewSampleAtMillis ?: return "Waiting for data"
         // Match the existing receipt watchdog, not cross-device measurement clocks.
-        val holdMillis = if (type == WireDataType.HEART_RATE) 3_000L else 1_000L
-        if (readAtMillis - receipt > holdMillis) return "Stale / no new sample"
+        if (readAtMillis - receipt > 3_000L) return "Stale / no new sample"
         val sample = stream.latest?.sample ?: return "Waiting for data"
-        val valid = if (type == WireDataType.HEART_RATE) {
-            sample.bpm?.let { it.isFinite() && it > 0 } == true
-        } else listOf(sample.x, sample.y, sample.z).all { it?.isFinite() == true }
+        val valid = sample.bpm?.let { it.isFinite() && it > 0 } == true
         return if (valid) null else "Invalid data"
     }
 
     val currentHeartRateBpm: Double?
-        get() = if (unavailableReason(WireDataType.HEART_RATE) == null)
+        get() = if (heartRateUnavailableReason() == null)
             session?.streams?.get(WireDataType.HEART_RATE)?.latest?.sample?.bpm else null
 
     companion object {
@@ -45,7 +38,6 @@ internal data class SensorDisplayData(
                 processing = ReceivedSensorStore.processingSnapshot(),
                 session = ReceivedSensorStore.snapshot(),
                 reception = ReceivedSensorStore.receptionDiagnostics(),
-                lastSummary = ReceivedSensorStore.lastCompletedSummary(),
                 readAtMillis = SystemClock.elapsedRealtime()
             )
         }
