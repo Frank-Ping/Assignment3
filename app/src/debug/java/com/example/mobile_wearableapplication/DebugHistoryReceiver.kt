@@ -57,7 +57,7 @@ class DebugHistoryReceiver : BroadcastReceiver() {
             intArrayOf(0,0,0,0,0), intArrayOf(15,25,15,3,2)
         )
         fun nanos(wall: Long) = (wall - start) * 1_000_000L
-        val totals = DoubleArray(5)
+        val totals = DoubleArray(3)
         schedule.forEachIndexed { hour, durations ->
             val hourStart = start + hour * 3_600_000L
             var cursor = hourStart
@@ -65,7 +65,7 @@ class DebugHistoryReceiver : BroadcastReceiver() {
                 val finish = minOf(cursor + minutes * 60_000L, now)
                 if (finish > cursor) {
                     intervals.add(ZoneInterval(nanos(cursor), nanos(finish), IntensityZone.entries[zone]))
-                    totals[zone] += (finish - cursor) / 1000.0
+                    if (zone < totals.size) totals[zone] += (finish - cursor) / 1000.0
                 }
                 cursor += minutes * 60_000L
             }
@@ -92,14 +92,14 @@ class DebugHistoryReceiver : BroadcastReceiver() {
                 rms.add(ChartPoint(time, if (missing) null else movement + random.nextDouble(0.0, 0.08), SampleSource.DEMO))
             }
         }
-        val durations = ZoneDurations(totals[0], totals[1], totals[2], totals[3], totals[4])
+        val durations = ZoneDurations(totals[0], totals[1], totals[2])
         HistoryPreviewStore.value = HistoryPreview(
             ProcessingSnapshot(chartOutput = ChartOutput(heartRate = hr, rms = rms,
                 zoneDurations = durations, zoneIntervals = intervals),
                 restingHeartRate = MetricResult.Available(68.0, CalculationEvidence(sources = setOf(SampleSource.DEMO))),
                 // Synthetic summary fixture, not a result calculated from minute-spaced chart points.
                 recovery = MetricResult.Available(
-                    RecoveryRate(startBpm = 150.0, endBpm = 120.0, declineBpm = 30.0, bpmPerMinute = 30.0),
+                    RecoveryRate(startBpm = 150.0, endBpm = 120.0, declineBpm = 30.0),
                     CalculationEvidence(sources = setOf(SampleSource.DEMO)))),
             start
         )

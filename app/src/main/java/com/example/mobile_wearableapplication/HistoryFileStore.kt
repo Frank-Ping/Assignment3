@@ -9,7 +9,7 @@ import java.io.File
 import java.util.concurrent.Executors
 
 internal data class StoredHour(val time: Long, val source: String, val sum: Double, val count: Long, val zones: List<Double>)
-internal data class StoredSummary(val ended: Long, val baseline: Double?, val recovery: Double?, val recoveryQuality: String = "UNKNOWN")
+internal data class StoredSummary(val ended: Long, val baseline: Double?, val recovery: Double?)
 internal data class StoredMetric(val value: Double, val savedAt: Long?)
 internal data class StoredHistory(val hours: List<StoredHour> = emptyList(), val summary: StoredSummary? = null,
     val error: String? = null, val ready: Boolean = false,
@@ -46,6 +46,21 @@ internal object HistoryFileStore {
                     }
                     root.put("latestMetrics", latest)
                 }
+                // Remove obsolete recovery fields from previously saved history.
+                root.getJSONObject("sessions").keys().forEach { key ->
+                    root.getJSONObject("sessions").getJSONObject(key).optJSONObject("summary")
+                        ?.optJSONObject("recovery")?.apply { remove("quality"); remove("bpmPerMinute") }
+                }
+                root.getJSONObject("latestMetrics").optJSONObject("recovery")?.apply { remove("quality"); remove("bpmPerMinute") }
+                // Older history contains two extra cumulative buckets; retain the visible three.
+                root.getJSONObject("sessions").keys().forEach { key ->
+                    val hours = root.getJSONObject("sessions").getJSONObject(key).getJSONObject("hours")
+                    hours.keys().forEach { id ->
+                        val row = hours.getJSONObject(id)
+                        val zones = row.getJSONArray("zones")
+                        row.put("zones", JSONArray(List(3) { zones.getDouble(it) }))
+                    }
+                }
                 publish()
             } catch (e: Exception) {
                 writable = false // Preserve an unreadable file rather than overwrite it.
@@ -72,7 +87,7 @@ internal object HistoryFileStore {
                         val start = Math.floorDiv(wall, 3_600_000L) * 3_600_000L
                         val id = "$start/$source"
                         return hours.optJSONObject(id) ?: JSONObject().put("time", start).put("source", source)
-                            .put("sum", 0.0).put("count", 0L).put("zones", JSONArray(List(5) { 0.0 }))
+                            .put("sum", 0.0).put("count", 0L).put("zones", JSONArray(List(3) { 0.0 }))
                             .also { hours.put(id, it) }
                     }
                     var last = data.getLong("lastHr")
@@ -95,9 +110,9 @@ internal object HistoryFileStore {
                         val earliest = if (first == processing.exerciseStartedAt) begin else begin + 3_600_000L
                         hours.keys().asSequence().toList().forEach { id ->
                             val row = hours.getJSONObject(id)
-                            if (row.getLong("time") >= earliest) row.put("zones", JSONArray(List(5) { 0.0 }))
+                            if (row.getLong("time") >= earliest) row.put("zones", JSONArray(List(3) { 0.0 }))
                         }
-                        intervals.forEach { interval ->
+                        intervals.filter { it.zone.ordinal < 3 }.forEach { interval ->
                             var from = maxOf(interval.startNanos / 1_000_000L + anchor, earliest)
                             val end = interval.endNanos / 1_000_000L + anchor
                             while (from < end) {
@@ -127,7 +142,7 @@ internal object HistoryFileStore {
                         recovery.put("remainingSeconds", processing.recoveryRemainingSeconds ?: JSONObject.NULL)
                         (recoveryResult as? MetricResult.Available)?.value?.let {
                             recovery.put("startBpm", it.startBpm).put("endBpm", it.endBpm)
-                                .put("quality", it.quality.name).put("declineBpm", it.declineBpm).put("bpmPerMinute", it.bpmPerMinute)
+                                .put("declineBpm", it.declineBpm)
                         }
                         if (summary != null) {
                             completed = !data.has("ended")
@@ -192,7 +207,7 @@ internal object HistoryFileStore {
             hours.keys().forEach { id ->
                 val row = hours.getJSONObject(id)
                 if (row.getLong("time") >= cutoff) rows.add(StoredHour(row.getLong("time"), row.getString("source"), row.getDouble("sum"), row.getLong("count"),
-                    List(5) { row.getJSONArray("zones").getDouble(it) }))
+                    List(3) { row.getJSONArray("zones").getDouble(it) }))
             }
             if (data.optLong("ended") >= cutoff && data.optLong("ended") > ended && data.has("summary")) {
                 ended = data.getLong("ended")
@@ -201,7 +216,7 @@ internal object HistoryFileStore {
                     val metric = saved.getJSONObject(name)
                     return if (metric.getBoolean("valid")) metric.getDouble(field) else null
                 }
-                summary = StoredSummary(ended, value("baseline", "bpm"), value("recovery", "declineBpm"), saved.getJSONObject("recovery").optString("quality", "UNKNOWN"))
+                summary = StoredSummary(ended, value("baseline", "bpm"), value("recovery", "declineBpm"))
             }
         }
         fun latest(name: String, field: String): StoredMetric? {

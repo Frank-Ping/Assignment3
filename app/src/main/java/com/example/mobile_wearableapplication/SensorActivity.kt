@@ -1,7 +1,6 @@
 package com.example.mobile_wearableapplication
 
 import com.example.shared.communication.SessionAction
-import com.example.shared.communication.SessionLifecycle
 
 import com.example.mobile_wearableapplication.communication.SensorDataReceiver
 import com.example.shared.communication.WireDataType
@@ -65,7 +64,7 @@ class SensorActivity : ComponentActivity() {
             if (!pageStarted) return
 
             refreshDiagnostics()
-            refreshHandler.postDelayed(this, 1_000L)
+            refreshHandler.postDelayed(this, 100L)
         }
     }
     private val timeoutTask = object : Runnable {
@@ -83,14 +82,8 @@ class SensorActivity : ComponentActivity() {
     private var chartEpochOffsetMillis by mutableStateOf<Long?>(null)
     private var chartSession: com.example.mobile_wearableapplication.processing.ProcessingSession? = null
     private var chartProcessing by mutableStateOf(ProcessingSnapshot())
-    private var pendingTransferText = "No batch received"
-    private var sessionText by mutableStateOf("No session received")
-    private var processingText by mutableStateOf("Processing: no session")
     private lateinit var receiver: SensorDataReceiver
     private var peerNodeId: String? = null
-    private var transferText by mutableStateOf("No batch received")
-    private var accelerationPreview by mutableStateOf("Acceleration: --")
-    private var heartRatePreview by mutableStateOf("Heart rate: --")
 
 
     private lateinit var connectionManager: WearConnectionManager
@@ -135,7 +128,7 @@ class SensorActivity : ComponentActivity() {
             check(pageStarted) { "Phone page not active" }
             val node = checkNotNull(peerNodeId)
             ReceivedSensorStore.accept(node, batch)
-        }, { pendingTransferText = it })
+        }, { /* Transfer diagnostics are logged by SensorDataReceiver. */ })
 
         setContent {
             MobileWearableApplicationTheme(darkTheme = true) {
@@ -197,21 +190,9 @@ class SensorActivity : ComponentActivity() {
         HistoryFileStore.update(chartProcessing, chartEpochOffsetMillis, force = true)
     }
     private fun refreshDiagnostics() {
-        transferText = pendingTransferText
         val display = SensorDisplayData.read()
         val snapshot = display.session
         val reception = display.reception
-        sessionText = snapshot?.let { "Session: ${it.sessionId}\nWatch: ${it.nodeId}" }
-            ?: "No session received"
-        val lastInterruption = reception.interruptions.lastOrNull()
-        sessionText += "\n${reception.message}\nReception interruptions retained: ${reception.interruptions.size}" +
-            "\nRejected while unconfirmed: ${reception.rejectedBatches}" +
-            (lastInterruption?.let {
-                val duration = ((it.endedAtMillis ?: SystemClock.elapsedRealtime()) - it.startedAtMillis) / 1000
-                "\nLast interruption: ${duration}s — ${it.reason}\nContinuity unknown; no offline replay."
-            } ?: "")
-        accelerationPreview = formatStream(display, WireDataType.ACCELEROMETER)
-        heartRatePreview = formatStream(display, WireDataType.HEART_RATE)
         val processing = display.processing
         chartNowMillis = System.currentTimeMillis()
         historyPreview = HistoryPreviewStore.value
@@ -237,18 +218,9 @@ class SensorActivity : ComponentActivity() {
             HistoryFileStore.update(processing, chartEpochOffsetMillis)
         }
         storedHistory = HistoryFileStore.snapshot
-        val preprocessing = processing.preprocessing
-        val exercise = (processing.exerciseHeartRate as? MetricResult.Available)?.value
         val intensity = (processing.intensity as? MetricResult.Available)?.value
         val exercising = processing.exerciseStartedAt != null && processing.recoveryStartedAt == null &&
             processing.endedAtNanos == null
-        val currentReason = when {
-            !exercising -> "Only available during exercise"
-            display.unavailableReason(WireDataType.HEART_RATE) != null -> display.unavailableReason(WireDataType.HEART_RATE)
-            exercise?.currentBpm == null -> "Insufficient fresh data"
-            else -> "3-second smoothed HR"
-        }
-        fun bpm(value: Double?) = value?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
         fun integerBpm(value: Double) = String.format(Locale.US, "%.0f bpm", value)
         fun savedTime(metric: StoredMetric?) = if (historyPreview == null && metric?.savedAt != null)
             java.text.SimpleDateFormat("MM/dd HH:mm", Locale.US).format(java.util.Date(metric.savedAt)) else "—"
@@ -257,24 +229,9 @@ class SensorActivity : ComponentActivity() {
         overview = mapOf(
             "current" to ((if (injectedHr != null) injectedHr.bpm.takeIf { injectedFresh }
                 else display.currentHeartRateBpm)?.let { String.format(Locale.US, "%.0f", it) } ?: "—"),
-            "currentLabel" to if (injectedHr != null) "ADB DEMO · display only" else "Raw HR",
-            "source" to (snapshot?.streams?.get(WireDataType.HEART_RATE)?.latest?.source?.name ?: "—"),
             "freshness" to if (injectedHr != null) {
                 if (injectedFresh) "Recent" else "Stale · send another ADB reading or clear preview"
             } else (display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"),
-            "intensity" to intensityText(processing.intensity),
-            "exercise" to exerciseHeartRateText(processing.exerciseHeartRate),
-            "exerciseCurrent" to bpm(exercise?.currentBpm.takeIf {
-                exercising && display.unavailableReason(WireDataType.HEART_RATE) == null
-            }),
-            "exerciseCurrentReason" to (currentReason ?: "Waiting for data"),
-            "exerciseAverage" to bpm(exercise?.timeWeightedAverageBpm),
-            "exercisePeak" to bpm(exercise?.smoothedPeakBpm),
-            "exerciseStatistics" to when (val result = processing.exerciseHeartRate) {
-                is MetricResult.Unavailable -> metricStatus(result)
-                is MetricResult.Available -> if (exercising) "Average: time weighted · Peak: smoothed"
-                    else "Retained exercise statistics · Peak: smoothed"
-            },
             "intensityZone" to (if (exercising) intensity?.zone?.name.orEmpty() else ""),
             "baselineTime" to savedTime(storedHistory.baseline),
             "recoveryTime" to savedTime(storedHistory.recovery),
@@ -283,133 +240,13 @@ class SensorActivity : ComponentActivity() {
                 is MetricResult.Available -> if (historyPreview != null) integerBpm(result.value) else "— waiting for save"
                 is MetricResult.Unavailable -> metricStatus(result)
             },
-            "baselineState" to when {
-                processing.exerciseStartedAt != null || processing.endedAtNanos != null ->
-                    if (processing.restingHeartRate is MetricResult.Available) "Frozen session baseline"
-                    else "Baseline window closed; no valid baseline"
-                processing.restingHeartRate is MetricResult.Available -> "Valid resting baseline"
-                else -> "Requires 30 seconds of stillness and sufficient HR data"
-            },
             "recovery" to if (historyPreview == null && storedHistory.recovery != null)
                 integerBpm(storedHistory.recovery!!.value) else when (val result = historyPreview?.processing?.recovery ?: processing.recovery) {
                 is MetricResult.Available -> if (historyPreview != null) integerBpm(result.value.declineBpm) else "— waiting for save"
                 is MetricResult.Unavailable -> metricStatus(result)
-            },
-            "details" to recoveryText(processing.recovery, processing.recoveryRemainingSeconds),
-            "historyStatus" to when {
-                processing.session == null -> "No session data"
-                !reception.ready -> "Historical / ${reception.message}"
-                reception.sessionLifecycle != SessionLifecycle.RUNNING -> "Historical / collection ended"
-                else -> "Current session · HR: ${display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"}; " +
-                    "XYZ: ${display.unavailableReason(WireDataType.ACCELEROMETER) ?: "Recent"}"
-            },
-            "recoveryQuality" to if (processing.recoveryStartedAt == null) "Recovery has not started" else
-                "Movement during recovery: ${when (processing.quality.movementDuringRecovery) {
-                    true -> "Detected"
-                    false -> "No movement detected in observed window"
-                    null -> "Unknown / insufficient acceleration coverage"
-                }}\nHR reception: ${display.unavailableReason(WireDataType.HEART_RATE) ?: "Recent"}\nCountdown follows watch data, not phone time.",
-            "summary" to summaryText(display.currentSummary),
-            "previous" to summaryText(display.lastSummary?.takeIf { it.session != processing.session }),
-            "hrChart" to "${display.charts.heartRate.size} raw samples · ${display.charts.gaps.count { it.stream == "HR" }} gaps",
-            "zoneChart" to zoneDurationText(display.charts.zoneDurations),
-            "rms" to "${metricStatus(processing.accelerationRms)} · ${processing.motion.state}\n${display.charts.rms.size} points"
+            }
         )
 
-        fun windowText(window: com.example.mobile_wearableapplication.processing.CoveredWindow?): String {
-            if (window == null) return "— (waiting for data)"
-            val mean = window.mean?.let { String.format(Locale.US, "%.1f bpm", it) } ?: "—"
-            return "$mean; coverage ${String.format(Locale.US, "%.0f%%", window.coverageFraction * 100)}; samples ${window.sampleCount}; smooth support ${String.format(Locale.US, "%.2fs", window.smoothingCoveredSeconds)}"
-        }
-        processingText = "Processing input (unique within current store retention)\n" +
-            "Acceleration: ${processing.acceleration.acceptedSamples}\n" +
-            "Heart rate: ${processing.heartRate.acceptedSamples}\n" +
-            "Session resting baseline: ${metricStatus(processing.restingHeartRate)}\n" +
-            "Exercise HR: ${exerciseHeartRateText(processing.exerciseHeartRate)}\n" +
-            "Intensity: ${intensityText(processing.intensity)}\n" +
-            "Zone duration: ${zoneDurationText(processing.zoneDurations)}\n" +
-            "Workout Recovery: ${recoveryText(processing.recovery, processing.recoveryRemainingSeconds)}\n" +
-            "Workout state: ${when (val state = processing.workoutState) {
-                is MetricResult.Available -> "${state.value.phase} · ${reception.sessionLifecycle}" +
-                    (if (!reception.ready) " (last confirmed)" else "")
-                is MetricResult.Unavailable -> metricStatus(state)
-            }}\n" +
-            "Acceleration RMS: ${metricStatus(processing.accelerationRms)}\n\n" +
-            "Motion: ${processing.motion.state}\n" +
-            "stillnessVerified: ${processing.quality.stillnessVerified ?: "Unknown"}; motionDetected: ${processing.quality.motionDetected ?: "Unknown"}\n" +
-            "Preprocessing (as of watch sample time)\n" +
-            "${if (!reception.ready || reception.sessionLifecycle != SessionLifecycle.RUNNING) "Historical / reception paused\n" else ""}" +
-            "Last valid raw HR (may be historical): ${preprocessing.rawHeartRateBpm ?: "—"}\n" +
-            "HR 3s: ${windowText(preprocessing.heartRate3s)}\n" +
-            "HR 5s: ${windowText(preprocessing.heartRate5s)}\n" +
-            "Acceleration 1s coverage: ${preprocessing.acceleration1s?.let { String.format(Locale.US, "%.0f%%", it.coverageFraction * 100) } ?: "—"}\n" +
-            "HR quality: ${preprocessing.heartRateStats}\n" +
-            "Acceleration quality: ${preprocessing.accelerationStats}\n" +
-            "Hold limits: HR 3s / acceleration 0.2s. Windows do not advance without new watch data.\n\n" +
-            "Chart data: raw HR ${display.charts.heartRate.size}; RMS ${display.charts.rms.size}; " +
-            "gaps ${display.charts.gaps.size}; phases ${display.charts.phases.size}\n" +
-            "Current summary: ${summaryText(display.currentSummary)}\n" +
-            "Last completed summary (this app run): ${summaryText(display.lastSummary)}"
-    }
-
-    private fun summaryText(summary: com.example.mobile_wearableapplication.processing.SessionSummary?): String =
-        summary?.let {
-            "${it.session.sessionId}\nBaseline: ${metricStatus(it.restingHeartRate)}${if (it.restingHeartRate is MetricResult.Available) " bpm" else ""}\n" +
-                "Exercise HR: ${exerciseHeartRateText(it.exerciseHeartRate)}\n" +
-                "Recovery: ${recoveryText(it.recovery, null)}\n" +
-                "Intensity durations: ${zoneDurationText(it.zoneDurations)}"
-        } ?: "— (no completed session)"
-
-    private fun exerciseHeartRateText(result: com.example.mobile_wearableapplication.processing.MetricResult<com.example.mobile_wearableapplication.processing.ExerciseHeartRate>): String =
-        when (result) {
-            is MetricResult.Unavailable -> metricStatus(result)
-            is MetricResult.Available -> {
-                fun bpm(value: Double?) = value?.let { "%.1f bpm".format(it) }
-                    ?: "— (outside exercise or insufficient fresh data)"
-                "\nCurrent (3s): ${bpm(result.value.currentBpm)}\nAverage: ${bpm(result.value.timeWeightedAverageBpm)}\nPeak (smoothed): ${bpm(result.value.smoothedPeakBpm)}"
-            }
-        }
-
-    private fun intensityText(result: MetricResult<com.example.mobile_wearableapplication.processing.ExerciseIntensity>): String =
-        when (result) {
-            is MetricResult.Unavailable -> metricStatus(result)
-            is MetricResult.Available -> {
-                val value = result.value
-                val percentage = value.percentage?.let { "%.1f%%".format(it) } ?: "—"
-                "${value.zone.name.lowercase().replaceFirstChar { it.uppercase() }} ($percentage; HRmax ${value.hrMaxBpm}, demo reference)"
-            }
-        }
-
-    private fun recoveryText(result: MetricResult<com.example.mobile_wearableapplication.processing.RecoveryRate>, remaining: Long?): String =
-        when (result) {
-            is MetricResult.Unavailable -> "— (${when (result.reason) {
-                com.example.mobile_wearableapplication.processing.UnavailableReason.INTERRUPTED_BY_MOVEMENT -> "Interrupted by movement"
-                com.example.mobile_wearableapplication.processing.UnavailableReason.RECOVERY_MOTION_UNKNOWN -> "Recovery motion unknown: insufficient acceleration coverage"
-                com.example.mobile_wearableapplication.processing.UnavailableReason.INSUFFICIENT_DATA -> "Insufficient data: incomplete recovery or inadequate endpoint coverage"
-                com.example.mobile_wearableapplication.processing.UnavailableReason.COLLECTING_RECOVERY -> "Collecting recovery"
-                com.example.mobile_wearableapplication.processing.UnavailableReason.AWAITING_PHASE_CONFIRMATION -> "Waiting for confirmed recovery phase"
-                else -> result.reason.name.lowercase().replace('_', ' ')
-            }})" +
-                (if (remaining != null && remaining > 0) " ($remaining s remaining; watch sample time)" else "")
-            is MetricResult.Available -> {
-                val r = result.value
-                "\nH0: %.1f bpm; H60: %.1f bpm\nRecovery: %.1f bpm (1-minute decline)".format(
-                    r.startBpm, r.endBpm, r.declineBpm) +
-                    (if (r.declineBpm <= 0) "\nHeart rate has not declined" else "") +
-                    "\nH0 window [−5s, 0s): ${evidenceText(r.startEvidence)}" +
-                    "\nH60 window [+55s, +60s): ${evidenceText(r.endEvidence)}"
-            }
-        }
-
-    private fun evidenceText(evidence: com.example.mobile_wearableapplication.processing.CalculationEvidence): String =
-        "coverage ${evidence.coverageFraction?.let { String.format(Locale.US, "%.0f%%", it * 100) } ?: "—"}; " +
-            "${evidence.sampleCount} valid samples; HR ${evidence.sources.joinToString().ifEmpty { "—" }}"
-
-    private fun zoneDurationText(value: com.example.mobile_wearableapplication.processing.ZoneDurations?): String {
-        if (value == null) return "— (waiting for exercise)"
-        return "\nLow: %.1f s\nModerate: %.1f s\nHigh: %.1f s\nUnclassified: %.1f s\nMissing: %.1f s\nTotal: %.1f s".format(
-            value.lowSeconds, value.moderateSeconds, value.highSeconds,
-            value.unclassifiedSeconds, value.missingSeconds, value.totalSeconds)
     }
 
     private fun metricStatus(result: MetricResult<*>): String = when (result) {
@@ -417,27 +254,6 @@ class SensorActivity : ComponentActivity() {
         is MetricResult.Unavailable -> "— (${result.reason.name.lowercase().replace('_', ' ')})"
     }
 
-    private fun formatStream(display: SensorDisplayData, type: WireDataType): String {
-        val title = if (type == WireDataType.ACCELEROMETER) "Acceleration" else "Heart rate"
-        val reason = display.unavailableReason(type)
-        val stream = display.session?.streams?.get(type) ?: return "$title: — ($reason)"
-        val received = stream.latest ?: return "$title: — ($reason)"
-        val sample = received.sample
-        val ageMillis = (display.readAtMillis -
-            checkNotNull(stream.lastNewSampleAtMillis)).coerceAtLeast(0L)
-        val freshness = reason ?: "Recent"
-        val value = if (reason != null) "— ($reason)" else if (type == WireDataType.ACCELEROMETER) {
-            String.format(Locale.US, "X: %.3f  Y: %.3f  Z: %.3f m/s^2", sample.x, sample.y, sample.z)
-        } else String.format(Locale.US, "%.1f bpm", display.currentHeartRateBpm)
-        val capacity = if (type == WireDataType.ACCELEROMETER) {
-            ReceivedSensorStore.ACCELERATION_CAPACITY
-        } else ReceivedSensorStore.HEART_RATE_CAPACITY
-        return "$title (${received.source})\n$value\n" +
-            "Sequence: ${sample.sequence}\nWatch timestamp: ${sample.timestampNanos} ns\n" +
-            "$freshness: last new sample received ${ageMillis / 1000}s ago\n" +
-            "Batches: ${stream.batches}; incoming samples: ${stream.receivedSamples}\n" +
-            "Stored: ${stream.history.size}/$capacity; duplicate batches: ${stream.duplicateBatches}"
-    }
 
 }
 

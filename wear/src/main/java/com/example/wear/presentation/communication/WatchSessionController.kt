@@ -16,6 +16,14 @@ class WatchSessionController(private val clock: () -> Long, private val newId: (
         private set
     private val replies = linkedMapOf<Pair<String, String>, Pair<SessionCommand, SessionReply>>()
 
+    /** Opening the watch page starts collection even before a phone connects. */
+    fun startForPage() {
+        if (state.lifecycle != SessionLifecycle.RUNNING) state = newSession(clock())
+    }
+
+    private fun newSession(now: Long) = SessionState(newId(), 1, SessionLifecycle.RUNNING,
+        listOf(PhaseTransition(SessionPhase.RESTING, 1, now)))
+
     fun execute(nodeId: String, command: SessionCommand): SessionReply {
         val key = nodeId to command.commandId
         replies[key]?.let { (original, reply) ->
@@ -29,8 +37,7 @@ class WatchSessionController(private val clock: () -> Long, private val newId: (
         if (error == null) {
             val now = clock()
             state = when (command.action) {
-                SessionAction.START_SESSION -> SessionState(newId(), 1, SessionLifecycle.RUNNING,
-                    listOf(PhaseTransition(SessionPhase.RESTING, 1, now)))
+                SessionAction.START_SESSION -> newSession(now)
                 SessionAction.START_WORKOUT, SessionAction.END_WORKOUT -> {
                     val phase = if (command.action == SessionAction.START_WORKOUT) SessionPhase.EXERCISING else SessionPhase.RECOVERING
                     state.copy(revision = state.revision + 1, transitions = state.transitions + PhaseTransition(phase, state.revision + 1, now))

@@ -63,7 +63,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         samples.forEach {
             motionDetector.accept(it)
             chartBuffer.acceleration(it, motionDetector.snapshot())
-            recoveryCalculator.observe(it.timestampNanos, motionDetector.snapshot().motionDetected)
             restingCalculator.observe(it.timestampNanos, motionDetector.snapshot().stillnessVerified == true)
         }
         state = state.copy(acceleration = summarize(
@@ -155,7 +154,6 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
             recoveryRemainingSeconds = recoveryCalculator.remaining(state.recoveryStartedAt, preprocessing.asOfWatchNanos, state.endedAtNanos),
             intensity = intensity, exerciseHeartRate = exerciseCalculator.result(state.exerciseStartedAt,
             state.recoveryStartedAt ?: state.endedAtNanos, preprocessing.asOfWatchNanos), restingHeartRate = restingCalculator.result(state.restingStartedAt), preprocessing = preprocessing, motion = motion, accelerationRms = motion.rms, quality = state.quality.copy(
-            movementDuringRecovery = recoveryCalculator.moved(state.recoveryStartedAt, preprocessing.asOfWatchNanos),
             stillnessVerified = motion.stillnessVerified, motionDetected = motion.motionDetected,
             heartRateCoverageFraction = preprocessing.heartRate5s?.coverageFraction,
             accelerationCoverageFraction = preprocessing.acceleration1s?.coverageFraction))
@@ -180,17 +178,10 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
     }
 
     @Synchronized
-    fun breakContinuity() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
+    fun breakContinuity() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; markHeartRateUnavailable(); preprocessor.breakContinuity(); motionDetector.interrupt(); restingCalculator.interrupt(); exerciseCalculator.interrupt(); recoveryCalculator.interrupt(); publish() }
 
     @Synchronized
-    fun markAccelerationUnavailable() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; motionDetector.interrupt(); restingCalculator.interrupt(); markRecoveryMotionUnavailable(); publish() }
-
-    private fun markRecoveryMotionUnavailable() {
-        val end = state.recoveryStartedAt?.plus(60_000_000_000L)
-        val now = preprocessor.snapshot().asOfWatchNanos
-        // A later page exit must not invalidate an already observed recovery window.
-        if (end == null || now == null || now < end) recoveryCalculator.markMotionUnavailable()
-    }
+    fun markAccelerationUnavailable() { automaticDetector.interrupt(); preprocessor.snapshot().asOfWatchNanos?.let { chartBuffer.interrupted("Acceleration",it) }; motionDetector.interrupt(); restingCalculator.interrupt(); publish() }
 
     private fun summarize(previous: InputSummary, timestamps: List<Long>, sources: List<SampleSource>) =
         InputSummary(

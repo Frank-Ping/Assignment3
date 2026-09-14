@@ -5,10 +5,6 @@ class RecoveryCalculator {
     private var recoveryStart: Long? = null
     private var finalResult: MetricResult<RecoveryRate>? = null
     private val samples = mutableListOf<HeartRateInput>()
-    private data class MotionObservation(val time: Long, val moving: Boolean?)
-    private val motion = mutableListOf<MotionObservation>()
-    private val brokenMotion = mutableSetOf<Long>()
-    fun markMotionUnavailable() { motion.lastOrNull()?.let { brokenMotion.add(it.time) } }
     private val interruptedAfter = mutableSetOf<Long>()
     fun accept(sample: HeartRateInput) {
         if (sample.sequence <= 0 || sample.timestampNanos < 0 || samples.lastOrNull()?.let {
@@ -20,32 +16,7 @@ class RecoveryCalculator {
         val oldest = samples.firstOrNull()?.sequence ?: sample.sequence
         interruptedAfter.removeAll { it < oldest }
     }
-    fun observe(time: Long, moving: Boolean?) {
-        if (motion.lastOrNull()?.let { time <= it.time } == true) return
-        if (finalResult != null || recoveryStart?.let { time > it + 60_000_000_000L } == true) return
-        motion.add(MotionObservation(time, moving))
-        val retainFrom = recoveryStart ?: (time - 65_000_000_000L)
-        while (motion.size > 2000 || (motion.size > 2 && motion[1].time < retainFrom)) motion.removeAt(0)
-        val oldest = motion.firstOrNull()?.time ?: time
-        brokenMotion.removeAll { it < oldest }
-    }
     fun interrupt() { samples.lastOrNull()?.let { interruptedAfter.add(it.sequence) } }
-    fun moved(t0: Long?, now: Long? = null): Boolean? {
-        if (t0 == null) return null
-        val end = minOf(t0 + 60_000_000_000L, now ?: (t0 + 60_000_000_000L))
-        if (end <= t0) return null
-        if (motion.any { it.time >= t0 && it.time < end && it.moving == true }) return true
-        var covered = 0L
-        for ((i, point) in motion.withIndex()) {
-            if (point.time >= end) break
-            if (point.moving != false || point.time in brokenMotion) continue
-            val from = maxOf(t0, point.time)
-            val to = minOf(end, motion.getOrNull(i+1)?.time ?: end,
-                point.time + SensorPreprocessor.ACCELERATION_HOLD_NANOS)
-            covered += (to-from).coerceAtLeast(0L)
-        }
-        return if (covered == end-t0) false else null
-    }
     fun remaining(t0: Long?, now: Long?, ended: Long?): Long? {
         if (t0 == null || ended != null) return null
         return ((t0 + 60_000_000_000L - (now ?: t0)).coerceAtLeast(0L) + 999_999_999L) / 1_000_000_000L
@@ -70,14 +41,7 @@ class RecoveryCalculator {
         recoveryStart = t0
         val end = t0 + 60_000_000_000L
         if (ended != null && ended < end) return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
-        val quality = when (moved(t0, minOf(now ?: t0, end))) {
-            true -> RecoveryQuality.LOW_QUALITY
-            false -> RecoveryQuality.GOOD
-            null -> RecoveryQuality.UNKNOWN
-        }
-        finalResult?.let { result ->
-            return if (result is MetricResult.Available) result.copy(value = result.value.copy(quality = quality)) else result
-        }
+        finalResult?.let { return it }
         if ((now ?: t0) < end) return MetricResult.Unavailable(UnavailableReason.COLLECTING_RECOVERY)
         if (exerciseStart == null || exerciseStart > t0 - 5_000_000_000L)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
@@ -86,7 +50,7 @@ class RecoveryCalculator {
         if (h0 == null || h60 == null || first.coverageFraction!! < 0.8 || last.coverageFraction!! < 0.8)
             return MetricResult.Unavailable(UnavailableReason.INSUFFICIENT_DATA)
         val drop = h0 - h60
-        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, drop, first, last, quality),
+        val result = MetricResult.Available(RecoveryRate(h0, h60, drop, first, last),
             CalculationEvidence(CalculationWindow(t0-5_000_000_000L,end), first.sampleCount+last.sampleCount,
                 sources = first.sources+last.sources))
         finalResult = result

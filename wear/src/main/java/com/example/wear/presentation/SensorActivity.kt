@@ -326,6 +326,8 @@ class SensorActivity : ComponentActivity() {
         connectionManager.start()
         pageHandler.removeCallbacksAndMessages(null)
         pageHandler.post(freshnessTask)
+        sessionController.startForPage()
+        startSessionCollection()
         showSession()
     }
 
@@ -414,8 +416,8 @@ class SensorActivity : ComponentActivity() {
         collecting = false
         collectionGeneration++
         // Reject new records before stopping the data sources.
-        accelerometerSource.stop()
-        heartRateSource.stop()
+        if (::accelerometerSource.isInitialized) accelerometerSource.stop()
+        if (::heartRateSource.isInitialized) heartRateSource.stop()
 
         batcher.stop()
         accelerationStatus = SensorStatus.STOPPED

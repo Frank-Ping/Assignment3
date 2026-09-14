@@ -1,11 +1,9 @@
 package com.example.mobile_wearableapplication.processing
 
+/** Cumulative seconds for classified intensity only; gaps remain in zone intervals. */
 data class ZoneDurations(
-    val lowSeconds: Double, val moderateSeconds: Double, val highSeconds: Double,
-    val unclassifiedSeconds: Double, val missingSeconds: Double
-) {
-    val totalSeconds: Double get() = lowSeconds + moderateSeconds + highSeconds + unclassifiedSeconds + missingSeconds
-}
+    val lowSeconds: Double, val moderateSeconds: Double, val highSeconds: Double
+)
 
 data class ZoneInterval(val startNanos: Long, val endNanos: Long, val zone: IntensityZone)
 
@@ -35,7 +33,7 @@ class ZoneDurationCalculator {
     private var committedCursor = 0L
     private var committedZone = IntensityZone.UNCLASSIFIED
     private var committedExpires = 0L
-    private val committedTotals = LongArray(IntensityZone.entries.size)
+    private val committedTotals = LongArray(3)
     fun result(start: Long?, finish: Long?, now: Long?): ZoneDurations? {
         if (start == null) return null
         if (finish != null && closedAt == finish) closedResult?.let { return it }
@@ -51,8 +49,8 @@ class ZoneDurationCalculator {
             val heldEnd = minOf(event.time, committedExpires).coerceAtLeast(committedCursor)
             append(committedIntervals, committedCursor, heldEnd, committedZone)
             append(committedIntervals, heldEnd, event.time, IntensityZone.MISSING)
-            committedTotals[committedZone.ordinal] += heldEnd - committedCursor
-            committedTotals[IntensityZone.MISSING.ordinal] += event.time - heldEnd
+            if (committedZone.ordinal < committedTotals.size)
+                committedTotals[committedZone.ordinal] += heldEnd - committedCursor
             committedCursor = event.time; committedZone = event.zone
             committedExpires = event.time + SensorPreprocessor.HEART_RATE_HOLD_NANOS
         }
@@ -68,8 +66,7 @@ class ZoneDurationCalculator {
             val heldEnd = minOf(to, expires).coerceAtLeast(cursor)
             append(tail, cursor, heldEnd, zone)
             append(tail, heldEnd, to, IntensityZone.MISSING)
-            totals[zone.ordinal] += heldEnd - cursor
-            totals[IntensityZone.MISSING.ordinal] += to - heldEnd
+            if (zone.ordinal < totals.size) totals[zone.ordinal] += heldEnd - cursor
             cursor = to
         }
         for (event in events) {
@@ -82,8 +79,7 @@ class ZoneDurationCalculator {
         addUntil(end)
         displayIntervals = committedIntervals.toList() + tail
         val result = ZoneDurations(totals[IntensityZone.LOW.ordinal]/1e9,
-            totals[IntensityZone.MODERATE.ordinal]/1e9, totals[IntensityZone.HIGH.ordinal]/1e9,
-            totals[IntensityZone.UNCLASSIFIED.ordinal]/1e9, totals[IntensityZone.MISSING.ordinal]/1e9)
+            totals[IntensityZone.MODERATE.ordinal]/1e9, totals[IntensityZone.HIGH.ordinal]/1e9)
         if (finish != null) { closedAt = finish; closedResult = result }
         return result
     }

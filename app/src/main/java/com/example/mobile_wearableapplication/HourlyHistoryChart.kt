@@ -39,7 +39,7 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
     val (sums, counts, zones) = remember(processing.chartOutput, offset, start, now / 1_000, kind, storedHours) {
         val sums = DoubleArray(12)
         val counts = IntArray(12)
-        val zones = Array(12) { DoubleArray(5) }
+        val zones = Array(12) { DoubleArray(3) }
     if (storedHours != null) {
         storedHours.forEach { row ->
             if (row.time in start..now) {
@@ -47,13 +47,13 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
                 if (index in 0..11) {
                     sums[index] += row.sum
                     counts[index] += row.count.toInt()
-                    row.zones.forEachIndexed { zone, seconds -> zones[index][zone] += seconds / 60.0 }
+                    row.zones.take(3).forEachIndexed { zone, seconds -> zones[index][zone] += seconds / 60.0 }
                 }
             }
         }
     } else if (offset != null) {
         if (stacked) {
-            processing.chartOutput.zoneIntervals.forEach { interval ->
+            processing.chartOutput.zoneIntervals.filter { it.zone.ordinal < 3 }.forEach { interval ->
                 val from = interval.startNanos / 1_000_000L + offset
                 val to = minOf(now, interval.endNanos / 1_000_000L + offset)
                 for (i in 0..11) {
