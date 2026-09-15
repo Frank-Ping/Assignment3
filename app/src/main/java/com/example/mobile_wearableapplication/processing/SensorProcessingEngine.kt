@@ -22,11 +22,8 @@ class SensorProcessingEngine(private val hrMaxBpm: Double = 200.0) {
         if (state.session == session) return
         finalSummary = null
         resetCalculators()
-        val pending = MetricResult.Unavailable(UnavailableReason.NOT_IMPLEMENTED)
         state = ProcessingSnapshot(
             session = session,
-            restingHeartRate = pending,
-            intensity = pending, recovery = pending,
             workoutState = MetricResult.Unavailable(UnavailableReason.AWAITING_PHASE_CONFIRMATION)
         )
         publish()

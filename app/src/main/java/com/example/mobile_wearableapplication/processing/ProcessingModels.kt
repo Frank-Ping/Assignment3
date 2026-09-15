@@ -5,7 +5,7 @@ data class ProcessingSession(val nodeId: String, val sessionId: String)
 enum class SampleSource { REAL, DEMO }
 enum class WorkoutPhase { RESTING, EXERCISING, RECOVERING }
 enum class UnavailableReason {
-    NO_SESSION, AWAITING_PHASE_CONFIRMATION, NOT_IMPLEMENTED,
+    NO_SESSION, AWAITING_PHASE_CONFIRMATION,
     COLLECTING_BASELINE, COLLECTING_RECOVERY, INSUFFICIENT_DATA, RECOVERY_INTERRUPTED
 }
 

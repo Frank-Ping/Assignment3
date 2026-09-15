@@ -138,18 +138,16 @@ object ReceivedSensorStore {
             ACCELERATION_CAPACITY
         } else HEART_RATE_CAPACITY
         while (stream.samples.size > capacity) stream.samples.pollFirstEntry()
-        if (key == activeSession) {
-            val session = ProcessingSession(nodeId, batch.sessionId)
-            val source = SampleSource.valueOf(batch.source.name)
-            when (batch.dataType) {
-                WireDataType.ACCELEROMETER -> processor.acceptAcceleration(session, newlyAccepted.map {
-                    AccelerationInput(it.sequence, it.timestampNanos, source,
-                        checkNotNull(it.x), checkNotNull(it.y), checkNotNull(it.z))
-                })
-                WireDataType.HEART_RATE -> processor.acceptHeartRate(session, newlyAccepted.map {
-                    HeartRateInput(it.sequence, it.timestampNanos, source, checkNotNull(it.bpm))
-                })
-            }
+        val session = ProcessingSession(nodeId, batch.sessionId)
+        val source = SampleSource.valueOf(batch.source.name)
+        when (batch.dataType) {
+            WireDataType.ACCELEROMETER -> processor.acceptAcceleration(session, newlyAccepted.map {
+                AccelerationInput(it.sequence, it.timestampNanos, source,
+                    checkNotNull(it.x), checkNotNull(it.y), checkNotNull(it.z))
+            })
+            WireDataType.HEART_RATE -> processor.acceptHeartRate(session, newlyAccepted.map {
+                HeartRateInput(it.sequence, it.timestampNanos, source, checkNotNull(it.bpm))
+            })
         }
     }
 

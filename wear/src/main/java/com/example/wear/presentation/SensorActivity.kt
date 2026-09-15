@@ -75,11 +75,9 @@ class SensorActivity : ComponentActivity() {
             if (collecting) {
                 if (accelerationStatus == SensorStatus.ACTIVE && lastAccelerationAt?.let { now - it >= 3_000L } == true) {
                     accelerationStatus = SensorStatus.WAITING_FOR_DATA
-                    accelerationText = "X: --\nY: --\nZ: -- (stale)"
                 }
                 if (heartRateStatus == SensorStatus.ACTIVE && lastHeartRateAt?.let { now - it >= 10_000L } == true) {
                     heartRateStatus = SensorStatus.WAITING_FOR_DATA
-                    heartRateText = "-- bpm (stale)"
                 }
             }
             pageHandler.postDelayed(this, 1_000L)
@@ -143,8 +141,8 @@ class SensorActivity : ComponentActivity() {
 
     private var pageStarted = false
     private var lastHeartRateStatus: SensorStatus? = null
-    private var heartRateText by mutableStateOf("-- bpm")
-    private var accelerationText by mutableStateOf("X: --\nY: --\nZ: --")
+    private var heartRateText by mutableStateOf<String?>(null)
+    private var accelerationText by mutableStateOf<String?>(null)
     private var permissionRequested = false
     private var permissionGeneration: Int? = null
 
@@ -221,7 +219,7 @@ class SensorActivity : ComponentActivity() {
                         SensorCard("Heart rate", R.drawable.ic_heart_filled, heartRateStatus,
                             cardHeight, true) {
                             Text(
-                                if (heartRateStatus == SensorStatus.ACTIVE) heartRateText else "— bpm",
+                                heartRateText.takeIf { heartRateStatus == SensorStatus.ACTIVE } ?: "— bpm",
                                 color = Color.White, fontSize = 18.sp, lineHeight = 22.sp,
                                 fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold
                             )
@@ -229,7 +227,7 @@ class SensorActivity : ComponentActivity() {
                         SensorCard("Acceleration · m/s²", R.drawable.ic_acceleration, accelerationStatus,
                             cardHeight, false) {
                             Row(Modifier.fillMaxWidth(0.9f), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                val values = accelerationText.lines()
+                                val values = accelerationText.takeIf { accelerationStatus == SensorStatus.ACTIVE }?.lines()
                                 listOf("X", "Y", "Z").forEachIndexed { index, axis ->
                                     Column(
                                         Modifier.weight(1f).border(0.5.dp, Color.DarkGray, RoundedCornerShape(4.dp))
@@ -237,8 +235,7 @@ class SensorActivity : ComponentActivity() {
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Text(axis, color = Color.LightGray, fontSize = 8.sp, lineHeight = 10.sp)
-                                        Text(if (accelerationStatus == SensorStatus.ACTIVE)
-                                            values.getOrNull(index)?.substringAfter(": ") ?: "—" else "—",
+                                        Text(values?.getOrNull(index)?.substringAfter(": ") ?: "—",
                                             color = Color.White, fontSize = 10.sp, lineHeight = 12.sp,
                                             fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold)
                                     }
@@ -276,14 +273,11 @@ class SensorActivity : ComponentActivity() {
             else {
                 selectedSource = HeartRateSourceType.DEMO
                 demoScenario = scenario
-                heartRateText = "-- bpm"
                 heartRateStatus = SensorStatus.NOT_STARTED
                 "DEMO configured: ${scenario.name}"
             }
         }
 
-        heartRateText = "-- bpm"
-        accelerationText = "X: --\nY: --\nZ: --"
         if (sessionController.state.lifecycle != SessionLifecycle.IDLE) {
             accelerationStatus = SensorStatus.STOPPED
             heartRateStatus = SensorStatus.STOPPED
@@ -308,8 +302,9 @@ class SensorActivity : ComponentActivity() {
         } else HealthServicesHeartRateSource.forPage(this)
         lastAccelerationAt = null
         lastHeartRateAt = null
-        heartRateText = "-- bpm"
-        accelerationText = "X: --\nY: --\nZ: --"
+        // A new collection must not display readings retained from the previous session.
+        heartRateText = null
+        accelerationText = null
         val fakeAcceleration = selectedSource == HeartRateSourceType.DEMO && demoScenario == HeartRateDemoScenario.AUTO
         accelerometerSource = if (fakeAcceleration) FakeAccelerometerSource() else SensorManagerAccelerometerSource(this)
         batcher.start(checkNotNull(sessionController.state.sessionId),
@@ -390,8 +385,6 @@ class SensorActivity : ComponentActivity() {
         batcher.stop()
         accelerationStatus = SensorStatus.STOPPED
         heartRateStatus = SensorStatus.STOPPED
-        heartRateText = "-- bpm"
-        accelerationText = "X: --\nY: --\nZ: --"
     }
 
     private fun requestHeartRateCollection() {
@@ -442,7 +435,6 @@ class SensorActivity : ComponentActivity() {
             onStatusChanged = { status ->
                 if (token == collectionGeneration && collecting && activePageOwner === pageOwner) {
                     logHeartRateStatus(status)
-                    if (status == SensorStatus.WAITING_FOR_DATA) heartRateText = "-- bpm (waiting)"
                 }
             }
         )

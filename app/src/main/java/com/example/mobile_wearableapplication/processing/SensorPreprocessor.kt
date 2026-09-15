@@ -99,8 +99,8 @@ class SensorPreprocessor {
     private fun advance(time: Long) { asOf = maxOf(asOf ?: time, time) }
     fun breakContinuity() { heartRate.breakContinuity() }
 
-    fun snapshot(phaseStartedAt: Long? = null, evaluationTime: Long? = null): PreprocessingSnapshot {
-        val end = asOf?.let { maxOf(it, phaseStartedAt ?: it, evaluationTime ?: it) }
+    fun snapshot(phaseStartedAt: Long? = null): PreprocessingSnapshot {
+        val end = asOf?.let { maxOf(it, phaseStartedAt ?: it) }
         val boundary = phaseStartedAt ?: 0L
         return PreprocessingSnapshot(end, end?.let { heartRate.window(it, 3 * SECOND, boundary) })
     }
