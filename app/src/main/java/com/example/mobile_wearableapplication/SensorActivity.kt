@@ -220,7 +220,11 @@ class SensorActivity : ComponentActivity() {
             "freshness" to if (injectedHr != null) {
                 if (injectedFresh) "Recent" else "Stale · send another ADB reading or clear preview"
             } else (display.heartRateUnavailableReason() ?: "Recent"),
-            "intensityZone" to (if (exercising) intensity?.zone?.name.orEmpty() else ""),
+            "intensityZone" to when {
+                exercising -> intensity?.zone?.name.orEmpty()
+                processing.recoveryStartedAt != null && processing.endedAtNanos == null -> "RECOVERING"
+                else -> ""
+            },
             "baselineTime" to savedTime(storedHistory.baseline),
             "recoveryTime" to savedTime(storedHistory.recovery),
             "baseline" to if (historyPreview == null && storedHistory.baseline != null)
@@ -322,6 +326,7 @@ private fun SensorPage(
                             val unavailable = value(key).startsWith("—")
                             Text(if (unavailable) when {
                                 value(key).contains("collecting") || value(key).contains("waiting") || value(key).contains("awaiting") || value(key).contains("no session") -> "Waiting For Data"
+                                value(key).contains("interrupted") -> "Recovery Interrupted"
                                 value(key).contains("insufficient") -> "Insufficient Data"
                                 value(key).contains("movement") -> "Movement Detected"
                                 value(key).contains("unknown") -> "Motion Unknown"

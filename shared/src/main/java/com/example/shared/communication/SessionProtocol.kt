@@ -20,7 +20,8 @@ data class SessionState(
     val phase: SessionPhase? get() = transitions.lastOrNull()?.phase
     fun allows(action: SessionAction): Boolean = when (action) {
         SessionAction.START_SESSION -> lifecycle != SessionLifecycle.RUNNING
-        SessionAction.START_WORKOUT -> lifecycle == SessionLifecycle.RUNNING && phase == SessionPhase.RESTING
+        SessionAction.START_WORKOUT -> lifecycle == SessionLifecycle.RUNNING &&
+            phase in setOf(SessionPhase.RESTING, SessionPhase.RECOVERING) && transitions.size < SessionProtocol.MAX_TRANSITIONS - 1
         SessionAction.END_WORKOUT -> lifecycle == SessionLifecycle.RUNNING && phase == SessionPhase.EXERCISING
         SessionAction.FINISH_SESSION -> lifecycle == SessionLifecycle.RUNNING
     }
@@ -30,8 +31,9 @@ data class SessionReply(val requestId: String, val accepted: Boolean, val error:
 
 /** Identical wire format in both application modules; longs are decimal strings. */
 object SessionProtocol {
+    const val MAX_TRANSITIONS = 255
     private fun parse(bytes: ByteArray): JSONObject {
-        require(bytes.size in 1..8192)
+        require(bytes.size in 1..32768)
         return JSONObject(bytes.toString(Charsets.UTF_8)).also { require(it.getInt("version") == 1) }
     }
     private fun id(value: String): String = value.also { require(it.isNotBlank() && it.length <= 128) }
@@ -63,12 +65,14 @@ object SessionProtocol {
     }.toString().toByteArray(Charsets.UTF_8)
     fun decodeReply(bytes: ByteArray): SessionReply = parse(bytes).let { json ->
         val list = json.getJSONArray("transitions")
-        require(list.length() in 0..3)
+        require(list.length() in 0..MAX_TRANSITIONS)
         val transitions = (0 until list.length()).map { index -> list.getJSONObject(index).let {
             PhaseTransition(SessionPhase.valueOf(it.getString("phase")), number(it, "revision"), number(it, "time"))
         } }
         transitions.forEachIndexed { index, t ->
-            require(t.phase == SessionPhase.entries[index] && t.revision == index + 1L)
+            val expected = if (index == 0) SessionPhase.RESTING
+                else if (index % 2 == 1) SessionPhase.EXERCISING else SessionPhase.RECOVERING
+            require(t.phase == expected && t.revision == index + 1L)
             if (index > 0) require(t.watchElapsedTimeNanos >= transitions[index - 1].watchElapsedTimeNanos)
         }
         val state = SessionState(optionalId(json, "sessionId"), number(json, "revision"),

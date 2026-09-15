@@ -5,7 +5,7 @@ import kotlin.math.abs
 enum class AutomaticWorkoutAction { START_WORKOUT, END_WORKOUT, FINISH_SESSION }
 
 /** Engineering defaults: +20 bpm to exercise, +10 bpm to rest, 3/3/10 seconds debounce.
- * One workout per collection session. Watch acknowledgements remain the phase time authority.
+ * Repeated workouts share one session. Watch acknowledgements remain the phase time authority.
  */
 class AutomaticWorkoutDetector(private val hrMax: Double) {
     private var baseline: Double? = null
@@ -40,9 +40,12 @@ class AutomaticWorkoutDetector(private val hrMax: Double) {
         val next = when (current) {
             WorkoutPhase.RESTING -> if (!still && elevated) AutomaticWorkoutAction.START_WORKOUT else null
             WorkoutPhase.EXERCISING -> if (still) AutomaticWorkoutAction.END_WORKOUT else null
-            WorkoutPhase.RECOVERING -> if (still && nearRest &&
-                snapshot.recoveryStartedAt?.let { time - it >= 60_000_000_000L } == true)
-                AutomaticWorkoutAction.FINISH_SESSION else null
+            WorkoutPhase.RECOVERING -> when {
+                !still && elevated -> AutomaticWorkoutAction.START_WORKOUT
+                still && nearRest && snapshot.recoveryStartedAt?.let { time - it >= 60_000_000_000L } == true ->
+                    AutomaticWorkoutAction.FINISH_SESSION
+                else -> null
+            }
         }
         if (next == null) { candidate = null; suggested = null; return null }
         if (time <= lastTime) return suggested

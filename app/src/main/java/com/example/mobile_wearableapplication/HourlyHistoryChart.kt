@@ -7,11 +7,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -26,54 +25,23 @@ import java.util.Locale
 /** Hour buckets are display summaries; Part D's metric calculations stay unchanged. */
 @Composable
 internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offset: Long?, kind: String, storedHours: List<StoredHour>? = null) {
-    val hourMillis = 3_600_000L
+    val hourMillis = HISTORY_HOUR_MILLIS
     val currentHour = Calendar.getInstance().apply {
         timeInMillis = now
         set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }.timeInMillis
     val start = currentHour - 11 * hourMillis
     val colors = listOf(Color(0xFF00DDE7), Color(0xFFFFD166), Color(0xFFFF7973))
+    val rangeColor = Color(0xFFD5D5DE)
     val stacked = kind == "Intensity"
-    // Refresh aggregation only for a new snapshot/time tick, not unrelated UI changes.
-    val (sums, counts, zones) = remember(processing.chartOutput, offset, start, now / 1_000, kind, storedHours) {
-        val sums = DoubleArray(12)
-        val counts = IntArray(12)
-        val zones = Array(12) { DoubleArray(3) }
-    if (storedHours != null) {
-        storedHours.forEach { row ->
-            if (row.time in start..now) {
-                val index = ((row.time - start) / hourMillis).toInt()
-                if (index in 0..11) {
-                    sums[index] += row.sum
-                    counts[index] += row.count.toInt()
-                    row.zones.take(3).forEachIndexed { zone, seconds -> zones[index][zone] += seconds / 60.0 }
-                }
-            }
-        }
-    } else if (offset != null) {
-        if (stacked) {
-            processing.chartOutput.zoneIntervals.filter { it.zone.ordinal < 3 }.forEach { interval ->
-                val from = interval.startNanos / 1_000_000L + offset
-                val to = minOf(now, interval.endNanos / 1_000_000L + offset)
-                for (i in 0..11) {
-                    val duration = minOf(to, start + (i + 1) * hourMillis) - maxOf(from, start + i * hourMillis)
-                    if (duration > 0) zones[i][interval.zone.ordinal] += duration / 60_000.0
-                }
-            }
-        } else processing.chartOutput.heartRate.forEach { point ->
-            val time = point.timestampNanos / 1_000_000L + offset
-            val value = point.value
-            if (time in start..now && value != null && value.isFinite()) {
-                val index = ((time - start) / hourMillis).toInt()
-                if (index in 0..11) { sums[index] += value; counts[index]++ }
-            }
-        }
+    val buckets = remember(processing.chartOutput, offset, start, now / 1_000, storedHours) {
+        aggregateHourlyHistory(processing.chartOutput, start, now, offset, storedHours)
     }
-        Triple(sums, counts, zones)
-    }
-    val means = List(12) { if (counts[it] == 0) null else sums[it] / counts[it] }
-    val low = if (stacked) 0.0 else 40.0
-    val high = if (stacked) 60.0 else 200.0
+    // Keep the usual HR scale, expanding it when necessary so extrema are never clipped.
+    val minimum = buckets.mapNotNull { it.minBpm }.minOrNull() ?: 40.0
+    val maximum = buckets.mapNotNull { it.maxBpm }.maxOrNull() ?: 200.0
+    val low = if (stacked) 0.0 else minOf(40.0, kotlin.math.floor(minimum / 20.0) * 20.0 - 20.0).coerceAtLeast(0.0)
+    val high = if (stacked) 60.0 else maxOf(200.0, kotlin.math.ceil(maximum / 20.0) * 20.0 + 20.0)
     val unit = if (stacked) "min" else "bpm"
     val format = SimpleDateFormat("HH:mm", Locale.getDefault())
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -109,50 +77,45 @@ internal fun HourlyHistoryChart(processing: ProcessingSnapshot, now: Long, offse
                 previousLabelEnd = labelX + paint.measureText(text)
             }
         }
-        val dash = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
         clipRect(left, top, right, bottom) {
             if (stacked) {
                 for (i in 0..11) {
                     var base = 0.0
-                    zones[i].take(3).forEachIndexed { zone, duration ->
+                    buckets[i].zoneMinutes.forEachIndexed { zone, duration ->
                         if (duration > 0) drawRect(colors[zone], Offset(x(i) - step * 0.32f, y(base + duration)),
                             Size(step * 0.64f, y(base) - y(base + duration)))
                         base += duration
                     }
                 }
             } else {
-                for (i in 0..11) {
-                    val value = means[i] ?: continue
-                    if (i > 0) means[i - 1]?.let { previous ->
-                        drawLine(colors[0], Offset(x(i - 1), y(previous)), Offset(x(i), y(value)), 2.dp.toPx())
-                    }
-                    drawCircle(colors[0], 3.dp.toPx(), Offset(x(i), y(value)))
-                }
-                val references = listOfNotNull((processing.restingHeartRate as? MetricResult.Available)?.value)
-                references.forEach { value ->
-                    if (value in low..high) {
-                        drawLine(colors[1], Offset(left, y(value)), Offset(right, y(value)), 1.dp.toPx(), pathEffect = dash)
-                        val referencePaint = Paint(paint).apply { color = android.graphics.Color.rgb(255, 209, 102) }
-                        val text = "Resting Heart Rate"
-                        val inset = 4.dp.toPx()
-                        val availableWidth = right - left - 2 * inset
-                        if (availableWidth > 0) {
-                            if (referencePaint.measureText(text) > availableWidth)
-                                referencePaint.textSize *= availableWidth / referencePaint.measureText(text)
-                            val baseline = if (y(value) - inset + referencePaint.ascent() >= top)
-                                y(value) - inset else y(value) + inset - referencePaint.ascent()
-                            drawContext.canvas.nativeCanvas.drawText(text,
-                                right - inset - referencePaint.measureText(text), baseline, referencePaint)
+                val barWidth = minOf(10.dp.toPx(), step * 0.38f)
+                buckets.forEachIndexed { i, bucket ->
+                    val minBpm = bucket.minBpm
+                    val maxBpm = bucket.maxBpm
+                    if (minBpm != null && maxBpm != null) {
+                        val barTop = y(maxBpm)
+                        val barHeight = y(minBpm) - barTop
+                        if (barHeight < 1f) {
+                            // A single value has no range; show a dot at that value.
+                            drawCircle(rangeColor, barWidth / 2, Offset(x(i), barTop))
+                        } else {
+                            val radius = minOf(barWidth, barHeight) / 2
+                            drawRoundRect(rangeColor, Offset(x(i) - barWidth / 2, barTop),
+                                Size(barWidth, barHeight), CornerRadius(radius, radius))
                         }
                     }
                 }
             }
         }
     }
-        // Reserve identical legend space so switching tabs does not resize the plot.
-        Row(Modifier.fillMaxWidth().alpha(if (stacked) 1f else 0f), horizontalArrangement = Arrangement.SpaceEvenly) {
-            IntensityZone.entries.take(3).forEachIndexed { i, zone ->
-                Text("● ${zone.name.lowercase().replaceFirstChar { it.uppercase() }}", color = colors[i], fontSize = 11.sp, maxLines = 1)
+        // Both tabs reserve a legend row, so switching does not resize the plot.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            if (stacked) {
+                IntensityZone.entries.take(3).forEachIndexed { i, zone ->
+                    Text("● ${zone.name.lowercase().replaceFirstChar { it.uppercase() }}", color = colors[i], fontSize = 11.sp, maxLines = 1)
+                }
+            } else {
+                Text("● Hourly Min–Max", color = rangeColor, fontSize = 11.sp, maxLines = 1)
             }
         }
     }

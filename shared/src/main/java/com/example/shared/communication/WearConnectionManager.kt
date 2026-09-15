@@ -293,7 +293,7 @@ class WearConnectionManager(
     companion object {
         private const val TAG = "WearConnection"
         private const val MAX_HANDSHAKE_BYTES = 1024
-        private const val ACK_TIMEOUT_MS = 3_000L
-        private const val POLL_DELAY_MS = 5_000L
+        private const val ACK_TIMEOUT_MS = 500L
+        private const val POLL_DELAY_MS = 700L
     }
 }

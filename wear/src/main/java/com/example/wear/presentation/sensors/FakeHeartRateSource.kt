@@ -3,6 +3,7 @@ package com.example.wear.presentation.sensors
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import com.example.wear.presentation.DemoControl
 import com.example.shared.communication.SessionPhase
 import com.example.wear.presentation.data.HeartRateRecord
 import com.example.wear.presentation.data.HeartRateSourceType
@@ -19,6 +20,8 @@ class FakeHeartRateSource(
 ) : HeartRateSource {
     private val handler = Handler(Looper.getMainLooper())
     private var running = false
+    private var intervalDemo = false
+    private var timelineStartedAtNanos = 0L
     private var sequence = 0L
     private var phaseTick = 0
     private var previousPhase: SessionPhase? = null
@@ -48,7 +51,9 @@ class FakeHeartRateSource(
                 phaseTick = (phaseTick + 1).coerceAtMost(3600)
                 val noise = doubleArrayOf(0.0, 1.0, 0.0, -1.0)[(phaseTick - 1) % 4]
                 // Independent input timeline: never wait for the algorithm to change phase.
-                lastBpm = if (scenario == HeartRateDemoScenario.AUTO) when {
+                lastBpm = if (intervalDemo) {
+                    IntervalDemoTimeline.heartRateAt((SystemClock.elapsedRealtimeNanos() - timelineStartedAtNanos) / 1e9)
+                } else if (scenario == HeartRateDemoScenario.AUTO) when {
                     sequence < 35 -> 72.0 + noise
                     sequence < 65 -> 72.0 + (sequence - 34) * 2.6
                     sequence < 95 -> 150.0 + noise
@@ -77,6 +82,10 @@ class FakeHeartRateSource(
 
     override fun start(onRecord: (HeartRateRecord) -> Unit, onStatusChanged: (SensorStatus) -> Unit) {
         if (running) return
+        intervalDemo = scenario == HeartRateDemoScenario.AUTO && DemoControl.intervalDemoEnabled
+        // AUTO starts acceleration first; capture its clock origin for the same collection run.
+        timelineStartedAtNanos = if (intervalDemo) DemoControl.intervalStartedAtNanos
+            ?: SystemClock.elapsedRealtimeNanos() else 0L
         sequence = 0L
         phaseTick = 0
         previousPhase = null

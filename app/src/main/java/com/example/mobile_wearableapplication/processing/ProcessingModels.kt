@@ -6,7 +6,7 @@ enum class SampleSource { REAL, DEMO }
 enum class WorkoutPhase { RESTING, EXERCISING, RECOVERING }
 enum class UnavailableReason {
     NO_SESSION, AWAITING_PHASE_CONFIRMATION, NOT_IMPLEMENTED,
-    COLLECTING_BASELINE, COLLECTING_RECOVERY, INSUFFICIENT_DATA
+    COLLECTING_BASELINE, COLLECTING_RECOVERY, INSUFFICIENT_DATA, RECOVERY_INTERRUPTED
 }
 
 /** Measurement time is watch elapsed time, never the phone receipt clock. */
@@ -65,7 +65,7 @@ data class ProcessingSnapshot(
     val restingStartedAt: Long?
         get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.RESTING }?.watchElapsedTimeNanos
     val exerciseStartedAt: Long?
-        get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.EXERCISING }?.watchElapsedTimeNanos
+        get() = phaseHistory.lastOrNull { it.phase == WorkoutPhase.EXERCISING }?.watchElapsedTimeNanos
     val recoveryStartedAt: Long?
-        get() = phaseHistory.firstOrNull { it.phase == WorkoutPhase.RECOVERING }?.watchElapsedTimeNanos
+        get() = phaseHistory.lastOrNull()?.takeIf { it.phase == WorkoutPhase.RECOVERING }?.watchElapsedTimeNanos
 }

@@ -20,7 +20,6 @@ class DebugDemoReceiver : BroadcastReceiver() {
             resultData = "DEMO fault $target=$name (affects fake sources only)"
             return
         }
-        resultData = DemoControl.configure?.invoke(intent.getStringExtra("scenario") ?: "NORMAL")
-            ?: "Open watch SensorActivity first"
+        resultData = DemoControl.configureScenario(intent.getStringExtra("scenario") ?: "NORMAL")
     }
 }

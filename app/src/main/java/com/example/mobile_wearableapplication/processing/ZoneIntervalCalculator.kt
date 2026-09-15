@@ -29,7 +29,6 @@ class ZoneIntervalCalculator {
     private var committedExpires = 0L
     fun update(start: Long?, finish: Long?, now: Long?) {
         if (start == null) return
-        if (finish != null && closedAt == finish) return
         val end = maxOf(start, finish ?: now ?: start)
         if (initializedStart == null) {
             initializedStart = start; committedCursor = start

@@ -8,7 +8,6 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 
-internal data class StoredHour(val time: Long, val sum: Double, val count: Long, val zones: List<Double>)
 internal data class StoredMetric(val value: Double, val savedAt: Long?)
 internal data class StoredHistory(val hours: List<StoredHour> = emptyList(),
     val error: String? = null,
@@ -18,7 +17,7 @@ internal data class StoredHistory(val hours: List<StoredHour> = emptyList(),
 internal object HistoryFileStore {
     private val worker = Executors.newSingleThreadExecutor()
     private var file: AtomicFile? = null
-    private var root = JSONObject().put("version", 1).put("sessions", JSONObject())
+    private var root = JSONObject().put("version", 2).put("sessions", JSONObject())
     @Volatile var snapshot = StoredHistory()
         private set
     private var lastSave = 0L
@@ -30,7 +29,7 @@ internal object HistoryFileStore {
         worker.execute {
             try {
                 if (file!!.baseFile.exists() || File(file!!.baseFile.path + ".bak").exists()) root = JSONObject(file!!.openRead().bufferedReader().use { it.readText() })
-                require(root.getInt("version") == 1)
+                require(root.getInt("version") in 1..2)
                 // Older files have no trustworthy per-metric save time. Retain values without inventing one.
                 if (!root.has("latestMetrics")) {
                     val latest = JSONObject()
@@ -56,10 +55,19 @@ internal object HistoryFileStore {
                     val hours = root.getJSONObject("sessions").getJSONObject(key).getJSONObject("hours")
                     hours.keys().forEach { id ->
                         val row = hours.getJSONObject(id)
+                        // A former sum/count cannot reconstruct extrema. Keep this hour blank
+                        // even if new readings arrive, rather than claim a complete hourly range.
+                        if (!row.has("rangeComplete")) {
+                            row.put("rangeComplete", row.optLong("count", 0L) == 0L ||
+                                (!row.isNull("minBpm") && !row.isNull("maxBpm")))
+                        }
+                        row.remove("sum")
+                        row.remove("count")
                         val zones = row.getJSONArray("zones")
                         row.put("zones", JSONArray(List(3) { zones.getDouble(it) }))
                     }
                 }
+                root.put("version", 2)
                 publish()
             } catch (e: Exception) {
                 writable = false // Preserve an unreadable file rather than overwrite it.
@@ -86,7 +94,8 @@ internal object HistoryFileStore {
                         val start = Math.floorDiv(wall, 3_600_000L) * 3_600_000L
                         val id = "$start/$source"
                         return hours.optJSONObject(id) ?: JSONObject().put("time", start).put("source", source)
-                            .put("sum", 0.0).put("count", 0L).put("zones", JSONArray(List(3) { 0.0 }))
+                            .put("minBpm", JSONObject.NULL).put("maxBpm", JSONObject.NULL)
+                            .put("rangeComplete", true).put("zones", JSONArray(List(3) { 0.0 }))
                             .also { hours.put(id, it) }
                     }
                     var last = data.getLong("lastHr")
@@ -94,7 +103,10 @@ internal object HistoryFileStore {
                         if (point.timestampNanos > last) {
                             point.value?.takeIf { it.isFinite() && it > 0 }?.let { bpm ->
                                 val row = hour(point.timestampNanos, point.source.name)
-                                row.put("sum", row.getDouble("sum") + bpm).put("count", row.getLong("count") + 1)
+                                val minimum = row.optDouble("minBpm").takeIf { it.isFinite() && it > 0 }
+                                val maximum = row.optDouble("maxBpm").takeIf { it.isFinite() && it > 0 }
+                                row.put("minBpm", minOf(minimum ?: bpm, bpm))
+                                    .put("maxBpm", maxOf(maximum ?: bpm, bpm))
                             }
                             last = point.timestampNanos
                         }
@@ -106,7 +118,8 @@ internal object HistoryFileStore {
                     if (first != null) {
                         val source = processing.heartRate.sources.singleOrNull()?.name ?: "MIXED"
                         val begin = Math.floorDiv(first / 1_000_000L + anchor, 3_600_000L) * 3_600_000L
-                        val earliest = if (first == processing.exerciseStartedAt) begin else begin + 3_600_000L
+                        val firstExercise = processing.phaseHistory.firstOrNull { it.phase == com.example.mobile_wearableapplication.processing.WorkoutPhase.EXERCISING }?.watchElapsedTimeNanos
+                        val earliest = if (first == firstExercise) begin else begin + 3_600_000L
                         hours.keys().asSequence().toList().forEach { id ->
                             val row = hours.getJSONObject(id)
                             if (row.getLong("time") >= earliest) row.put("zones", JSONArray(List(3) { 0.0 }))
@@ -203,8 +216,11 @@ internal object HistoryFileStore {
             val hours = data.getJSONObject("hours")
             hours.keys().forEach { id ->
                 val row = hours.getJSONObject(id)
-                if (row.getLong("time") >= cutoff) rows.add(StoredHour(row.getLong("time"), row.getDouble("sum"), row.getLong("count"),
-                    List(3) { row.getJSONArray("zones").getDouble(it) }))
+                if (row.getLong("time") >= cutoff) rows.add(StoredHour(row.getLong("time"),
+                    row.optDouble("minBpm").takeIf { it.isFinite() && it > 0 },
+                    row.optDouble("maxBpm").takeIf { it.isFinite() && it > 0 },
+                    List(3) { row.getJSONArray("zones").getDouble(it) },
+                    row.optBoolean("rangeComplete", false)))
             }
         }
         fun latest(name: String, field: String): StoredMetric? {

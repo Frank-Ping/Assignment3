@@ -3,11 +3,12 @@ package com.example.wear.presentation.sensors
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import com.example.wear.presentation.DemoControl
 import com.example.wear.presentation.data.AccelerometerRecord
 import com.example.wear.presentation.data.SensorStatus
 import kotlin.math.sin
 
-/** AUTO timeline: still for 35 s, moving until 95 s, then still. */
+/** Movement follows the selected input timeline, independently of detected phases. */
 class FakeAccelerometerSource : AccelerometerSource {
     private val handler = Handler(Looper.getMainLooper())
     private var running = false
@@ -16,7 +17,9 @@ class FakeAccelerometerSource : AccelerometerSource {
         if (running) return
         running = true
         status = onStatusChanged
+        val intervalDemo = DemoControl.intervalDemoEnabled
         val started = SystemClock.elapsedRealtimeNanos()
+        if (intervalDemo) DemoControl.intervalStartedAtNanos = started
         var sequence = 0L
         val tick = object : Runnable {
             override fun run() {
@@ -28,7 +31,8 @@ class FakeAccelerometerSource : AccelerometerSource {
                 }
                 val now = SystemClock.elapsedRealtimeNanos()
                 val seconds = (now - started) / 1e9
-                val moving = seconds >= 35 && seconds < 95
+                val moving = if (intervalDemo)
+                    IntervalDemoTimeline.isMovingAt(seconds) else seconds >= 35 && seconds < 95
                 val wave = sin(seconds * 2 * Math.PI * 1.5)
                 onStatusChanged(SensorStatus.ACTIVE)
                 onRecord(AccelerometerRecord(
